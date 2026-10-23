@@ -16,12 +16,14 @@ spool_n() { ls "$SP"/*.json 2>/dev/null | wc -l; }
 echo "=== 1) outage"
 systemctl restart patchscope-agent; sleep 20
 echo "spool before outage: $(spool_n)"
-iptables -I OUTPUT -d "$IP" -p tcp --dport 443 -j DROP
-sleep 60
-echo "spool during outage (60s): $(spool_n)"
-journalctl -u patchscope-agent --since '-70 s' -o cat --no-pager | grep -m3 'send:'
-iptables -D OUTPUT -d "$IP" -p tcp --dport 443 -j DROP
-for i in $(seq 1 30); do sleep 5; n=$(spool_n); [ "$n" -le 1 ] && break; done
+# analysis 서버 IP 만 blackhole (iptables 없는 AL2023 포함, SSM 경로 영향 없음)
+ip route add blackhole "$IP/32"
+trap 'ip route del blackhole "$IP/32" 2>/dev/null' EXIT
+sleep 90
+echo "spool during outage (90s): $(spool_n) (expect >= 8: 10s batch)"
+journalctl -u patchscope-agent --since '-100 s' -o cat --no-pager | grep -m2 'send:'
+ip route del blackhole "$IP/32"
+for i in $(seq 1 60); do sleep 5; n=$(spool_n); [ "$n" -le 1 ] && break; done
 echo "spool after recovery: $(spool_n) (waited $((i*5))s)"
 
 echo "=== 2) duplicate resend"
