@@ -1,0 +1,4 @@
+# EC2(Linux)에서 실행되는 파일은 LF 고정
+* text=auto eol=lf
+*.exe binary
+*.o binary

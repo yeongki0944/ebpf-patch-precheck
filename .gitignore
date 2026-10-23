@@ -1,0 +1,30 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+*.tfplan
+
+# Secrets / keys (토큰·CA 개인키·인증서는 절대 커밋하지 않음)
+*.pem
+*.key
+*.crt
+*.token
+.env
+secrets/
+
+# Go / eBPF build outputs
+code/agent/bin/
+code/agent/**/*_bpfel.o
+code/agent/**/*_bpfeb.o
+code/**/vmlinux.h
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local scratch
+*.log
