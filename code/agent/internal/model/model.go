@@ -68,6 +68,7 @@ type FileRef struct {
 	Deleted       bool     `json:"deleted,omitempty"`
 	Ownership     string   `json:"ownership"`
 	Packages      []string `json:"packages,omitempty"` // N-E:V-R.A
+	Note          string   `json:"note,omitempty"`
 }
 
 type Record struct {

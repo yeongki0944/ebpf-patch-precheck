@@ -51,10 +51,16 @@ func (r *resolver) byID(id procfs.DevIno) (string, string) {
 // fileRef 는 확정된 경로·식별자로 FileRef 를 만든다.
 func (r *resolver) fileRef(path, status string, id procfs.DevIno, deleted, otherNS bool) *model.FileRef {
 	f := &model.FileRef{Path: path, PathStatus: status, Dev: id.Dev, Ino: id.Ino, Deleted: deleted}
+	// 다른 mount namespace(systemd PrivateTmp/ProtectSystem 서비스 포함)라도
+	// 같은 경로의 호스트 파일이 같은 dev/ino 면 동일 파일로 확인된 것으로 본다.
+	if otherNS && path != "" && !deleted && id.Valid() && verify(path, id) {
+		otherNS = false
+	}
 	switch {
 	case otherNS:
-		// 다른 mount namespace 의 경로는 호스트 RPM DB 로 해석하지 않음
+		// 호스트 파일과 동일성을 확인하지 못함: 호스트 RPM DB 로 해석하지 않음
 		f.Ownership = model.OwnUnknown
+		f.Note = "other_mount_namespace"
 	case deleted:
 		// 삭제된 파일: 현재 경로의 새 파일로 해석하지 않고, 인벤토리 로드 시점 inode 가 같았던 경우만 연결
 		f.Ownership = model.OwnDeleted

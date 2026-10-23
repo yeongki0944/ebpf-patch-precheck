@@ -69,6 +69,11 @@ libc = [r for r in recs if r["kind"] in ("file_mmap", "file_open", "mapped_file"
         and r.get("comm") in ("curl", "cat", "openssl")]
 check("libc mapped/opened by short process, rpm owner", any(r["file"]["ownership"] == "rpm" for r in libc),
       sorted({(path(r), tuple(r["file"].get("packages") or [])) for r in libc})[:1])
+# 경로가 있는 시스템 라이브러리가 rpm 이 아닌 것으로 분류되면 원인 표시
+bad = [r for r in recs if path(r).startswith("/usr/lib64/") and (r.get("file") or {}).get("ownership") != "rpm"
+       and not (r.get("file") or {}).get("deleted")]
+check("/usr/lib64 files with path are rpm-owned", not bad,
+      collections.Counter((r["file"]["ownership"], r["file"]["path_status"], r["file"].get("note", ""), r.get("comm")) for r in bad).most_common(5))
 ssl = [r for r in recs if r.get("comm") in ("curl", "openssl") and ("libssl" in path(r) or "libcrypto" in path(r))]
 check("openssl libs linked to process", any(r["file"]["ownership"] == "rpm" for r in ssl),
       sorted({(path(r), tuple(r["file"].get("packages") or [])) for r in ssl})[:2])
