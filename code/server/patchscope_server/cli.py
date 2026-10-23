@@ -50,6 +50,42 @@ def main(argv):
         with db.connect() as conn:
             for r in conn.execute("SELECT agent_id, created_at, rotated_at, revoked_at, last_seen FROM agents ORDER BY agent_id"):
                 print(r["agent_id"], "revoked" if r["revoked_at"] else "active", "last_seen=", r["last_seen"])
+    elif cmd == "upload-plan":
+        import json
+        from . import analysis
+        path, label = args[0], (args[1] if len(args) > 1 else None)
+        plan = json.load(open(path))
+        with db.connect() as conn:
+            v = analysis.validate_plan(conn, plan)
+            row = conn.execute(
+                """INSERT INTO patch_plans (host_id, inventory_id, plan_type, label, plan, validation, uploaded_by)
+                   VALUES (%s,%s,%s,%s,%s,%s,'cli') RETURNING id""",
+                (plan["host_id"], plan["inventory_id"], plan["plan_type"], label, json.dumps(plan), analysis.to_json(v))).fetchone()
+        print(f"plan_id={row['id']} items={len(v['items'])} unsupported={len(v['unsupported'])} warnings={v['warnings']}")
+        return main(["report", str(row["id"])])
+    elif cmd == "report":
+        from . import analysis
+        with db.connect() as conn:
+            p = conn.execute("SELECT * FROM patch_plans WHERE id = %s", (int(args[0]),)).fetchone()
+            r = analysis.analyze(conn, p)
+        c = r["coverage"]
+        print(f"coverage: sessions={len(c['sessions'])} {c['from']} ~ {c['to']} complete={c['complete']} "
+              f"incomplete_batches={c['incomplete_batches']} lost~{c['lost_events_estimate']}")
+        for p in r["packages"]:
+            svcs = ", ".join(p["services"]) or "-"
+            print(f"  [{p['classification']:<17}] {p['name']:<28} {p['from']} -> {p['to']}")
+            if p["direct"] or p["file_access"]:
+                print(f"      services: {svcs}")
+                for d in (p["direct"] + p["file_access"])[:4]:
+                    print(f"      {d['unit'] or '(unattributed)'} {d['comm']} {','.join(d['evidence_kinds'])} {d['files'][:2]}")
+            elif p["static_dependents"]:
+                print(f"      static dependents: {len(p['static_dependents'])} e.g. {p['static_dependents'][:3]}")
+        print("services:", [(s["unit"], s["packages"]) for s in r["services"]][:15])
+        if r["kernel"]:
+            k = r["kernel"]
+            print(f"kernel: running={k['running']} target={k['target']} modules={len(k['modules'])} "
+                  f"external={k['external_modules']} default_boot={k['default_boot']} missing={k['missing']}")
+        print("unresolved:", [(u["kind"], u["path_status"], u["ownership"], u["n"]) for u in r["unresolved"]][:8])
     elif cmd == "set-admin-password":
         pw = sys.stdin.readline().rstrip("\n")
         if len(pw) < 12:
