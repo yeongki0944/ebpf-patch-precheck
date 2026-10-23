@@ -17,9 +17,9 @@ secrets/
 
 # Go / eBPF build outputs
 code/agent/bin/
-code/agent/**/*_bpfel.o
-code/agent/**/*_bpfeb.o
+code/agent/**/*.bpf.o
 code/**/vmlinux.h
+code/agent/go.sum.tmp
 
 # Python
 __pycache__/

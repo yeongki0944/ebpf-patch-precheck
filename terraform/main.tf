@@ -167,7 +167,7 @@ resource "aws_instance" "host" {
   instance_type          = each.value.instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [each.value.sg]
-  iam_instance_profile   = aws_iam_instance_profile.ec2.name
+  iam_instance_profile   = each.value.role == "analysis" ? aws_iam_instance_profile.analysis.name : aws_iam_instance_profile.ec2.name
 
   user_data = templatefile("${path.module}/user_data.sh", {
     host_key  = each.key
@@ -194,4 +194,80 @@ resource "aws_instance" "host" {
     Name = "${var.name}-${each.key}"
     Role = each.value.role
   }
+}
+
+# ---------------------------------------------------------------------------
+# 빌드 산출물 버킷: analysis 가 업로드, 대상은 운영자가 발급한 presigned URL 로만 다운로드
+#   destroy 시 객체까지 삭제 (force_destroy)
+# ---------------------------------------------------------------------------
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "artifacts" {
+  bucket        = "${var.name}-artifacts-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket                  = aws_s3_bucket.artifacts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  rule {
+    id     = "expire-old-builds"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 30
+    }
+  }
+}
+
+# analysis 전용 role (S3 쓰기). 대상 호스트 role 에는 S3 권한을 주지 않음
+resource "aws_iam_role" "analysis" {
+  name               = "${var.name}-analysis-role"
+  assume_role_policy = aws_iam_role.ec2.assume_role_policy
+}
+
+resource "aws_iam_role_policy_attachment" "analysis_ssm" {
+  role       = aws_iam_role.analysis.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role_policy" "analysis_artifacts" {
+  name = "artifacts-rw"
+  role = aws_iam_role.analysis.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = "${aws_s3_bucket.artifacts.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.artifacts.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "analysis" {
+  name = "${var.name}-analysis-profile"
+  role = aws_iam_role.analysis.name
 }

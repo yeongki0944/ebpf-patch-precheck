@@ -14,3 +14,7 @@ output "analysis_private_dns" {
 output "ssm_connect" {
   value = { for k, v in aws_instance.host : k => "aws ssm start-session --profile ${var.aws_profile} --region ${var.region} --target ${v.id}" }
 }
+
+output "artifacts_bucket" {
+  value = aws_s3_bucket.artifacts.bucket
+}
