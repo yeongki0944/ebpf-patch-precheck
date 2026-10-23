@@ -15,7 +15,8 @@ echo "no CA verify -> $(curl -sS -o /dev/null -w '%{http_code}' "$U/api/v1/healt
 code "$U/login" >/dev/null
 CSRF=$(grep -o 'name="csrf" value="[^"]*"' /tmp/ps-page | head -1 | sed 's/.*value="//; s/"//')
 echo "login wrong pw -> $(code -X POST --data-urlencode 'password=wrong-password-xx' --data-urlencode "csrf=$CSRF" "$U/login") $(grep -c 'invalid password' /tmp/ps-page)"
-echo "login -> $(code -X POST --data-urlencode "password@/root/patchscope-admin-password" --data-urlencode "csrf=$CSRF" "$U/login") (expect 303)"
+# 파일의 개행을 제거해 stdin 으로 전달 (명령행·로그에 비밀번호를 남기지 않음)
+echo "login -> $(tr -d '\n' < /root/patchscope-admin-password | code -X POST --data-urlencode "password@-" --data-urlencode "csrf=$CSRF" "$U/login") (expect 303)"
 
 check() {
   local name=$1 url=$2 c
