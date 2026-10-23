@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}영향 분석 #{{ p.id }}{% endblock %}
+{% block body %}
+<h1>영향 분석 #{{ p.id }} {{ p.label or '' }}</h1>
+<p><a href="/hosts/{{ r.host_id }}">← 호스트</a> · <a href="/plans/{{ p.id }}/report.json">JSON</a> · <a href="/plans/{{ p.id }}/report.csv">CSV</a> · 인쇄: 브라우저 인쇄 기능</p>
+<div class="note" role="note">{{ r.disclaimer }}</div>
+
+<h2>근거 범위</h2>
+<ul>
+  <li>인벤토리 <span class="mono">{{ r.inventory_id }}</span>, 계획 유형 {{ r.plan_type }}, 계획 완전성:
+    {% if r.plan_complete %}<span class="badge ok">complete</span>{% else %}<span class="badge warn">incomplete</span>{% endif %}</li>
+  <li>관측 세션 {{ r.coverage.sessions | length }}개, {{ r.coverage['from'] | ts(tz) }} ~ {{ r.coverage['to'] | ts(tz) }}</li>
+  <li>수집 상태: {% if r.coverage.complete %}<span class="badge ok">손실 없음</span>
+      {% else %}<span class="badge bad">불완전</span> 불완전 batch {{ r.coverage.incomplete_batches }}, spool 삭제 {{ r.coverage.dropped_batches }}, 추정 손실 이벤트 {{ r.coverage.lost_events_estimate }}{% endif %}</li>
+</ul>
+{% if r.plan_warnings %}<h3>계획 경고</h3><ul>{% for w in r.plan_warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+{% if r.unsupported_items %}<h3>분석 미지원 거래</h3><ul>{% for i in r.unsupported_items %}<li class="mono">{{ i.action }} {{ i.name }} {{ i.from_nevra or '' }} → {{ i.to_nevra or '' }}</li>{% endfor %}</ul>{% endif %}
+
+<h2>서비스별 영향 후보</h2>
+<table><thead><tr><th scope="col">서비스</th><th scope="col">관련 변경 패키지</th><th scope="col">프로세스</th></tr></thead><tbody>
+{% for s in r.services %}<tr><td>{{ s.unit }}</td><td class="mono">{{ s.packages | join(', ') }}</td><td>{{ s.processes | join(', ') }}</td></tr>
+{% else %}<tr><td colspan="3">관측된 연결이 없습니다 (안전 판정 아님).</td></tr>{% endfor %}
+</tbody></table>
+
+<h2>변경 패키지별</h2>
+<table>
+  <thead><tr><th scope="col">패키지</th><th scope="col">변경</th><th scope="col">분류</th><th scope="col">근거</th></tr></thead>
+  <tbody>
+  {% for k in r.packages %}
+  <tr>
+    <th scope="row" class="mono">{{ k.name }}</th>
+    <td class="mono">{{ k.from }}<br>→ {{ k.to }}</td>
+    <td><span class="badge {{ {'direct':'bad','file_access':'warn','static_dependency':'warn','no_observation':'ok'}[k.classification] }}">{{
+      {'direct':'직접 관측 영향 후보','file_access':'파일 접근 영향 후보','static_dependency':'정적 의존 후보','no_observation':'해당 기간 관측 없음'}[k.classification] }}</span></td>
+    <td>
+      {% for d in k.direct %}
+        <div><strong>{{ d.unit or '(unattributed)' }}</strong> {{ d.comm }} pid {{ d.pid }} — {{ d.evidence_kinds | join(', ') }} ×{{ d.events }}
+          <br><span class="mono muted">{{ d.files | join(', ') }}</span>
+          <br><span class="muted">{{ d['first'] | ts(tz) }} ~ {{ d['last'] | ts(tz) }} · records {{ d.record_ids[:5] | join(',') }}</span></div>
+      {% endfor %}
+      {% for d in k.file_access %}
+        <div>[파일 접근] <strong>{{ d.unit or '(unattributed)' }}</strong> {{ d.comm }} — {{ d.evidence_kinds | join(', ') }} ×{{ d.events }}
+          <br><span class="mono muted">{{ d.files | join(', ') }}</span> <span class="muted">로딩·실행 여부 미확인, 재검증 필요</span></div>
+      {% endfor %}
+      {% if k.static_dependents %}<details><summary>정적 의존 패키지 {{ k.static_dependents | length }}개 (실행 미확인)</summary>
+        <span class="mono">{{ k.static_dependents | join(', ') }}</span></details>{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>근거 미해결 항목</h2>
+<p class="muted">경로 미확정·RPM 미소유·다른 mount namespace 파일. 영향 없음으로 처리하지 않으며 사람이 확인해야 합니다.</p>
+<table><thead><tr><th scope="col">증거</th><th scope="col">경로 상태</th><th scope="col">소유</th><th scope="col">레코드</th><th scope="col">이벤트</th></tr></thead><tbody>
+{% for u in r.unresolved %}<tr><td>{{ u.kind }}</td><td>{{ u.path_status }}</td><td>{{ u.ownership }}</td><td>{{ u.n }}</td><td>{{ u.events }}</td></tr>{% endfor %}
+</tbody></table>
+
+{% if r.kernel %}
+<h2>커널 변경 (별도 검증)</h2>
+<div class="note">{{ r.kernel.note }}</div>
+<ul>
+  <li>실행 중: <span class="mono">{{ r.kernel.running }}</span> (boot {{ r.kernel.boot_id }})</li>
+  <li>설치됨: <span class="mono">{{ r.kernel.installed | join(', ') }}</span></li>
+  <li>목표: <span class="mono">{{ r.kernel.target | join(', ') }}</span></li>
+  <li>기본 부팅 대상: <span class="mono">{{ r.kernel.default_boot or '정보 없음' }}</span></li>
+  <li>로드된 모듈 {{ r.kernel.modules | length }}개, 외부 모듈: {{ r.kernel.external_modules | join(', ') or '없음/정보 없음' }}, DKMS: {{ r.kernel.dkms if r.kernel.dkms is not none else '정보 없음' }}</li>
+  {% if r.kernel.missing %}<li><span class="badge warn">누락</span> {{ r.kernel.missing | join(', ') }}</li>{% endif %}
+</ul>
+<h3>검증 항목</h3><ol>{% for c in r.kernel.checks %}<li>{{ c }}</li>{% endfor %}</ol>
+{% if r.kernel.modules %}<details><summary>로드된 모듈</summary><table><thead><tr><th scope="col">모듈</th><th scope="col">파일</th><th scope="col">소유 패키지</th></tr></thead><tbody>
+{% for m in r.kernel.modules %}<tr><td>{{ m.name }}</td><td class="mono">{{ m.path or '' }}</td><td class="mono">{{ m.package or '미확인' }}</td></tr>{% endfor %}</tbody></table></details>{% endif %}
+{% endif %}
+{% endblock %}

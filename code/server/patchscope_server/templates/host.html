@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ h.hostname }}</h1>
+<p class="mono">{{ h.host_id }} · {{ h.os_id }} {{ h.os_version }} · {{ h.kernel }} · boot {{ h.boot_id }}</p>
+
+<h2>관측 세션</h2>
+<table>
+  <thead><tr><th scope="col">세션</th><th scope="col">기간</th><th scope="col">boot / 커널</th><th scope="col">batch</th>
+    <th scope="col">손실</th><th scope="col">인벤토리</th><th scope="col">종료</th></tr></thead>
+  <tbody>
+  {% for s in sessions %}
+  {% set t = s.total or {} %}
+  <tr>
+    <td><a class="mono" href="/sessions/{{ s.session_id }}">{{ s.session_id[:12] }}</a></td>
+    <td>{{ s.first_window_start | ts(tz) }}<br>~ {{ s.last_created_at | ts(tz) }}</td>
+    <td class="mono">{{ s.boot_id[:8] }}<br>{{ s.kernel }}</td>
+    <td>{{ s.batch_count }} (seq {{ s.max_seq }})</td>
+    <td>{% if s.incomplete_batches or s.dropped_batch_ids %}
+        <span class="badge bad">불완전</span> 불완전 batch {{ s.incomplete_batches }}, spool 삭제 {{ s.dropped_batch_ids | length }}
+        {% else %}<span class="badge ok">손실 없음</span>{% endif %}
+        <br><span class="muted">perf_lost {{ t.perf_lost or 0 }}, queue_drop {{ t.queue_drop or 0 }}</span></td>
+    <td class="mono">{{ s.inventory_ids | join(', ') }}</td>
+    <td>{{ 'yes (' ~ s.end_reason ~ ')' if s.ended else '진행 중/미수신' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if sessions | length >= 2 %}
+<form method="get" action="/compare">
+  <fieldset><legend>패치 전후 비교</legend>
+  <label>이전 <select name="before">{% for s in sessions %}<option value="{{ s.session_id }}">{{ s.session_id[:12] }} {{ s.kernel }} {{ s.first_window_start | ts(tz) }}</option>{% endfor %}</select></label>
+  <label>이후 <select name="after">{% for s in sessions %}<option value="{{ s.session_id }}">{{ s.session_id[:12] }} {{ s.kernel }} {{ s.first_window_start | ts(tz) }}</option>{% endfor %}</select></label>
+  <button type="submit">비교</button></fieldset>
+</form>
+{% endif %}
+
+<h2>패치 계획</h2>
+<form method="post" action="/plans" enctype="multipart/form-data">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="plan">plan-export JSON</label> <input id="plan" type="file" name="file" accept="application/json" required>
+  <label for="label">이름</label> <input id="label" name="label">
+  <button type="submit">업로드</button>
+</form>
+<table>
+  <thead><tr><th scope="col">ID</th><th scope="col">유형</th><th scope="col">이름</th><th scope="col">인벤토리</th><th scope="col">업로드</th><th scope="col">경고</th></tr></thead>
+  <tbody>{% for p in plans %}
+  <tr><td><a href="/plans/{{ p.id }}">#{{ p.id }}</a></td><td>{{ p.plan_type }}</td><td>{{ p.label or '' }}</td>
+    <td class="mono">{{ p.inventory_id }}</td><td>{{ p.uploaded_at | ts(tz) }}</td><td>{{ (p.warnings or []) | length }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+
+<h2>사전 점검 이력</h2>
+<table>
+  <thead><tr><th scope="col">시각</th><th scope="col">상태</th><th scope="col">커널 / boot</th><th scope="col">에이전트</th><th scope="col">실패·경고</th></tr></thead>
+  <tbody>{% for c in caps %}
+  <tr><td>{{ c.received_at | ts(tz) }}</td><td>{{ c.status }}</td><td class="mono">{{ c.kernel }} / {{ c.boot_id[:8] }}</td>
+    <td>{{ c.agent_version }}</td><td>{{ (c.report.reasons or []) | join('; ') }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+
+<h2>RPM 인벤토리</h2>
+<table>
+  <thead><tr><th scope="col">ID</th><th scope="col">캡처</th><th scope="col">패키지 수</th></tr></thead>
+  <tbody>{% for i in invs %}<tr><td class="mono">{{ i.inventory_id }}</td><td>{{ i.captured_at | ts(tz) }}</td><td>{{ i.package_count }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endblock %}

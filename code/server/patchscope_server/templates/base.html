@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PatchScope{% endblock %}</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a1a; }
+  header { background: #1f2937; color: #fff; padding: .6rem 1rem; display: flex; gap: 1rem; align-items: center; }
+  header a { color: #fff; }
+  main { padding: 1rem; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1.5rem; font-size: .9rem; }
+  th, td { border: 1px solid #d1d5db; padding: .3rem .5rem; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; }
+  code, .mono { font-family: ui-monospace, monospace; font-size: .85rem; word-break: break-all; }
+  .badge { padding: .1rem .4rem; border-radius: .25rem; font-size: .8rem; font-weight: 600; }
+  .ok { background: #d1fae5; color: #065f46; }
+  .warn { background: #fef3c7; color: #92400e; }
+  .bad { background: #fee2e2; color: #991b1b; }
+  .muted { color: #4b5563; }
+  .note { border-left: 4px solid #f59e0b; background: #fffbeb; padding: .5rem .75rem; margin: .75rem 0; }
+  .skip { position: absolute; left: -999px; } .skip:focus { left: 1rem; top: 1rem; background: #fff; color: #000; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+<header>
+  <strong>PatchScope</strong>
+  {% if user %}
+  <nav aria-label="주 메뉴"><a href="/">호스트</a></nav>
+  <span class="muted" style="color:#d1d5db">시간대: {{ tz }} (<a href="/tz/{{ 'UTC' if tz == 'KST' else 'KST' }}">{{ 'UTC' if tz == 'KST' else 'KST' }} 로 보기</a>)</span>
+  <form method="post" action="/logout" style="margin-left:auto">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit">로그아웃</button>
+  </form>
+  {% endif %}
+</header>
+<main id="main">
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

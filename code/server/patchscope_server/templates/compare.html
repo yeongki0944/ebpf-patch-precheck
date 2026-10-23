@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>패치 전후 비교</h1>
+<table>
+  <thead><tr><th scope="col"></th><th scope="col">이전</th><th scope="col">이후</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">세션</th><td class="mono"><a href="/sessions/{{ b.session_id }}">{{ b.session_id[:12] }}</a></td><td class="mono"><a href="/sessions/{{ a.session_id }}">{{ a.session_id[:12] }}</a></td></tr>
+    <tr><th scope="row">커널 / boot</th><td class="mono">{{ b.kernel }} / {{ b.boot_id[:8] }}</td><td class="mono">{{ a.kernel }} / {{ a.boot_id[:8] }}</td></tr>
+    <tr><th scope="row">기간</th><td>{{ b.first_window_start | ts(tz) }} ~ {{ b.last_created_at | ts(tz) }}</td><td>{{ a.first_window_start | ts(tz) }} ~ {{ a.last_created_at | ts(tz) }}</td></tr>
+    <tr><th scope="row">인벤토리</th><td class="mono">{{ b.inventory_ids | join(', ') }}</td><td class="mono">{{ a.inventory_ids | join(', ') }}</td></tr>
+    <tr><th scope="row">수집 상태</th>
+      <td>{{ '손실 없음' if not b.incomplete_batches and not b.dropped_batch_ids else '불완전' }}</td>
+      <td>{{ '손실 없음' if not a.incomplete_batches and not a.dropped_batch_ids else '불완전' }}</td></tr>
+  </tbody>
+</table>
+<div class="note">같은 작업을 수행한 세션끼리 비교해야 의미가 있습니다. 차이는 패치 원인으로 자동 확정하지 않습니다.</div>
+
+<h2>서비스·프로세스별 RPM 의존 변화</h2>
+<table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">패키지</th><th scope="col">변화</th><th scope="col">이전</th><th scope="col">이후</th></tr></thead><tbody>
+{% for c in changes %}<tr><td>{{ c.unit }}</td><td>{{ c.comm }}</td><td class="mono">{{ c.package }}</td><td>{{ c.change }}</td>
+  <td class="mono">{{ c.before | join(', ') }}</td><td class="mono">{{ c.after | join(', ') }}</td></tr>
+{% else %}<tr><td colspan="6">변화 없음</td></tr>{% endfor %}
+</tbody></table>
+
+{% macro errs(rows) %}<table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">대상/코드</th><th scope="col">횟수</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.unit }}</td><td>{{ r.comm }}</td><td class="mono">{{ r.requested_path or '' }}{% if r.errno %} errno={{ r.errno }}{% endif %}{% if r.exit_code is defined and r.exit_code is not none %} exit={{ r.exit_code }}{% endif %}{% if r.signal %} signal={{ r.signal }}{% endif %}</td><td>{{ r.n }}</td></tr>
+{% else %}<tr><td colspan="4">없음</td></tr>{% endfor %}</tbody></table>{% endmacro %}
+<h2>실패한 파일 접근 (ENOENT 제외)</h2>
+<h3>이전</h3>{{ errs(bfails) }}<h3>이후</h3>{{ errs(afails) }}
+<h2>비정상 종료</h2>
+<h3>이전</h3>{{ errs(bexits) }}<h3>이후</h3>{{ errs(aexits) }}
+{% endblock %}

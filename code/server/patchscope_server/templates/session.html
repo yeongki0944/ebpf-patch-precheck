@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>세션 <span class="mono">{{ s.session_id }}</span></h1>
+<p>{{ s.first_window_start | ts(tz) }} ~ {{ s.last_created_at | ts(tz) }} · 커널 <span class="mono">{{ s.kernel }}</span> · 에이전트 {{ s.agent_version }}</p>
+{% if s.incomplete_batches or s.dropped_batch_ids or missing %}
+<div class="note" role="note"><strong>불완전 수집:</strong> 손실 batch {{ s.incomplete_batches }}, spool 한도 삭제 {{ s.dropped_batch_ids | length }},
+  미수신 seq {{ missing[:20] | join(', ') }}{% if missing | length > 20 %} …{% endif %}. 이 구간의 미관측은 판단 근거로 쓸 수 없습니다.</div>
+{% else %}<p><span class="badge ok">손실 없음</span></p>{% endif %}
+<p class="muted">수집 정책: {{ s.policy }}</p>
+
+{% if bad %}
+<h2>불완전 batch</h2>
+<table><thead><tr><th scope="col">seq</th><th scope="col">시각</th><th scope="col">사유</th><th scope="col">손실</th></tr></thead><tbody>
+{% for b in bad %}<tr><td>{{ b.seq }}</td><td>{{ b.created_at | ts(tz) }}</td><td>{{ b.reason }}</td>
+  <td class="mono">{% for k, v in b.delta.items() if v and k in ('perf_lost','kernel_output_fail','queue_drop','inflight_full','followup_drop','spool_drop_records','decode_fail') %}{{ k }}={{ v }} {% endfor %}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+
+<h2>서비스 의존성</h2>
+<table><thead><tr><th scope="col">서비스(unit)</th><th scope="col">프로세스 인스턴스</th><th scope="col">RPM 소유 파일</th><th scope="col">연결 패키지</th></tr></thead><tbody>
+{% for v in services %}<tr><td><a href="/sessions/{{ s.session_id }}/service?unit={{ v.unit | urlencode }}">{{ v.unit }}</a></td>
+  <td>{{ v.procs }}</td><td>{{ v.rpm_files }}</td><td>{{ v.packages }}</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}
