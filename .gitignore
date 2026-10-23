@@ -28,3 +28,4 @@ __pycache__/
 
 # Local scratch
 *.log
+terraform/.logs/
