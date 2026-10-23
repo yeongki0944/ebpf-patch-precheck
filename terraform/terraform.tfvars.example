@@ -1,0 +1,5 @@
+# cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars 는 git 제외)
+aws_profile = "your_sso_profile"
+
+# 분석 서버 443 을 직접 열어야 할 때만 본인 IP/32 지정. 기본은 SSM 포트 포워딩.
+# operator_cidrs = ["203.0.113.10/32"]
