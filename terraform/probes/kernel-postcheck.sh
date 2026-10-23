@@ -15,5 +15,5 @@ echo "agent: $(systemctl is-active patchscope-agent)"
 journalctl -u patchscope-agent -b --no-pager -o cat | grep -E 'status=|attached|inventory' | head -4
 /opt/patchscope/bin/patchscope-agent precheck --spool /tmp/ps-pc 2>&1 | head -1
 rm -rf /tmp/ps-pc
-bash /dev/stdin <<'EOF' 2>/dev/null
-EOF
+bash /usr/local/bin/ps-batch.py >/dev/null 2>&1 || /usr/local/bin/ps-batch.py | head -1
+curl -fsS -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1/

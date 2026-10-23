@@ -13,9 +13,15 @@ CFG=/etc/patchscope-server
 APP_USER=patchscope
 
 TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
-md() { curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
+md() { curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/$1"; }
 PDNS=$(md local-hostname)
 PIP=$(md local-ipv4)
+# 운영자 브라우저 접근용 공인 이름 (있으면 SAN 에 추가)
+PUBDNS=$(md public-hostname || true)
+PUBIP=$(md public-ipv4 || true)
+SAN="DNS:$PDNS,IP:$PIP"
+[ -n "$PUBDNS" ] && SAN="$SAN,DNS:$PUBDNS"
+[ -n "$PUBIP" ] && SAN="$SAN,IP:$PUBIP"
 
 # ---- user / dirs
 id "$APP_USER" >/dev/null 2>&1 || useradd --system --home /var/lib/patchscope-server --shell /sbin/nologin "$APP_USER"
@@ -30,14 +36,15 @@ if [ ! -f "$CA_DIR/ca.key" ]; then
     -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -out "$CA_DIR/ca.crt"
 fi
-if [ ! -f "$CFG/server.crt" ] || ! openssl x509 -in "$CFG/server.crt" -noout -ext subjectAltName 2>/dev/null | grep -q "$PDNS"; then
+if [ ! -f "$CFG/server.crt" ] || ! openssl x509 -in "$CFG/server.crt" -noout -ext subjectAltName 2>/dev/null | grep -q "$PDNS" \
+   || { [ -n "$PUBDNS" ] && ! openssl x509 -in "$CFG/server.crt" -noout -ext subjectAltName 2>/dev/null | grep -q "$PUBDNS"; }; then
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CFG/server.key"
   openssl req -new -key "$CFG/server.key" -subj "/CN=$PDNS" -out /tmp/server.csr
   cat > /tmp/server.ext <<EOF
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
 extendedKeyUsage=serverAuth
-subjectAltName=DNS:$PDNS,IP:$PIP
+subjectAltName=$SAN
 EOF
   openssl x509 -req -in /tmp/server.csr -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -days 180 -sha256 -extfile /tmp/server.ext -out "$CFG/server.crt"
@@ -113,7 +120,7 @@ cat > /etc/nginx/conf.d/patchscope.conf <<EOF
 server {
     listen 443 ssl;
     http2 on;
-    server_name $PDNS $PIP;
+    server_name $PDNS $PIP $PUBDNS $PUBIP;
     ssl_certificate     $CFG/server.crt;
     ssl_certificate_key $CFG/server.key;
     ssl_protocols TLSv1.2 TLSv1.3;
