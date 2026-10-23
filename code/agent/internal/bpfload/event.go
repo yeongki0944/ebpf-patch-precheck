@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -13,8 +14,15 @@ const (
 	EvMmap = 4
 )
 
+// kflags (patchscope.h PS_KF_*)
+const (
+	KFKPathComplete  = 0x1
+	KFKPathTruncated = 0x2
+	KFNlinkZero      = 0x4
+)
+
 // EventSize 는 struct ps_event 크기 (patchscope.h 와 일치해야 함).
-const EventSize = 352
+const EventSize = 1000
 
 type Event struct {
 	TsNs          uint64
@@ -32,8 +40,12 @@ type Event struct {
 	Prot          uint32
 	DFD           int32
 	HasIdent      bool
+	KFlags        uint32
 	Comm          string
-	Path          string
+	CgroupDfl     string // cgroup v2 leaf 이름
+	CgroupPids    string // cgroup v1 pids leaf 이름
+	Path          string // 요청 경로
+	KPath         string // 커널 dentry 경로 (완전할 때만, 마운트 네임스페이스 루트 기준)
 }
 
 // Decode 는 reflection 없이 고정 오프셋으로 디코드한다.
@@ -58,12 +70,35 @@ func Decode(b []byte, e *Event) error {
 	e.Prot = le.Uint32(b[68:])
 	e.DFD = int32(le.Uint32(b[72:]))
 	e.HasIdent = le.Uint32(b[76:]) != 0
-	e.Comm = cstr(b[80:96])
-	e.Path = cstr(b[96:352])
+	e.KFlags = le.Uint32(b[80:])
+	klen := le.Uint32(b[84:])
+	e.Comm = cstr(b[88:104])
+	e.CgroupDfl = cstr(b[104:168])
+	e.CgroupPids = cstr(b[168:232])
+	e.Path = cstr(b[232:488])
+	e.KPath = ""
+	if e.KFlags&KFKPathComplete != 0 && e.KFlags&KFKPathTruncated == 0 && klen <= 512 {
+		e.KPath = AssembleKPath(b[488 : 488+klen])
+	}
 	if e.Type < EvExec || e.Type > EvMmap {
 		return fmt.Errorf("unknown event type %d", e.Type)
 	}
 	return nil
+}
+
+// AssembleKPath 는 leaf→root 순서의 NUL 구분 이름을 절대 경로로 만든다.
+// 루트 dentry 이름("/")은 건너뛴다.
+func AssembleKPath(raw []byte) string {
+	parts := bytes.Split(bytes.TrimRight(raw, "\x00"), []byte{0})
+	var out []string
+	for i := len(parts) - 1; i >= 0; i-- {
+		p := string(parts[i])
+		if p == "" || p == "/" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return "/" + strings.Join(out, "/")
 }
 
 func cstr(b []byte) string {

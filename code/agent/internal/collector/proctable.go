@@ -56,6 +56,10 @@ func (t *procTable) fillUnit(p *procInfo, ppid uint32, parentTicks uint64) {
 	} else {
 		p.unitSource = "none"
 	}
+	t.fillNS(p)
+}
+
+func (t *procTable) fillNS(p *procInfo) {
 	if ns := procfs.MountNS(p.pid); ns != "" && t.selfNS != "" && ns != t.selfNS {
 		p.otherNS = true
 	}

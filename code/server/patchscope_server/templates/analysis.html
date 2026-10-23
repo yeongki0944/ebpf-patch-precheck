@@ -33,15 +33,25 @@
     <td><span class="badge {{ {'direct':'bad','file_access':'warn','static_dependency':'warn','no_observation':'ok'}[k.classification] }}">{{
       {'direct':'직접 관측 영향 후보','file_access':'파일 접근 영향 후보','static_dependency':'정적 의존 후보','no_observation':'해당 기간 관측 없음'}[k.classification] }}</span></td>
     <td>
-      {% for d in k.direct %}
-        <div><strong>{{ d.unit or '(unattributed)' }}</strong> {{ d.comm }} pid {{ d.pid }} — {{ d.evidence_kinds | join(', ') }} ×{{ d.events }}
-          <br><span class="mono muted">{{ d.files | join(', ') }}</span>
-          <br><span class="muted">{{ d['first'] | ts(tz) }} ~ {{ d['last'] | ts(tz) }} · records {{ d.record_ids[:5] | join(',') }}</span></div>
+      {% if k.direct or k.file_access %}
+      <p>서비스 {{ k.services | length }}개 · 직접 근거 프로세스 {{ k.direct | length }} · 파일 접근만 {{ k.file_access | length }}
+        <br><span class="muted">{{ k.services[:8] | join(', ') }}{% if k.services | length > 8 %} …{% endif %}</span></p>
+      <details><summary>프로세스별 근거 보기</summary>
+      <table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">증거</th><th scope="col">파일</th><th scope="col">기간</th></tr></thead><tbody>
+      {% for d in k.direct[:200] %}
+        <tr><td>{{ d.unit or '(unattributed)' }} <span class="muted">{{ d.unit_source }}</span></td><td>{{ d.comm }} ({{ d.pid }})</td>
+          <td>{{ d.evidence_kinds | join(', ') }} ×{{ d.events }}</td><td class="mono">{{ d.files[:3] | join(', ') }}</td>
+          <td>{{ d['first'] | ts(tz) }}<br>{{ d['last'] | ts(tz) }}</td></tr>
       {% endfor %}
-      {% for d in k.file_access %}
-        <div>[파일 접근] <strong>{{ d.unit or '(unattributed)' }}</strong> {{ d.comm }} — {{ d.evidence_kinds | join(', ') }} ×{{ d.events }}
-          <br><span class="mono muted">{{ d.files | join(', ') }}</span> <span class="muted">로딩·실행 여부 미확인, 재검증 필요</span></div>
+      {% for d in k.file_access[:100] %}
+        <tr><td>{{ d.unit or '(unattributed)' }}</td><td>{{ d.comm }} ({{ d.pid }})</td>
+          <td>[파일 접근] {{ d.evidence_kinds | join(', ') }} ×{{ d.events }}<br><span class="muted">로딩·실행 여부 미확인</span></td>
+          <td class="mono">{{ d.files[:3] | join(', ') }}</td><td>{{ d['first'] | ts(tz) }}</td></tr>
       {% endfor %}
+      </tbody></table>
+      {% if k.direct | length > 200 or k.file_access | length > 100 %}<p class="muted">화면에는 일부만 표시합니다. 전체는 JSON/CSV 보고서를 확인하세요.</p>{% endif %}
+      </details>
+      {% endif %}
       {% if k.static_dependents %}<details><summary>정적 의존 패키지 {{ k.static_dependents | length }}개 (실행 미확인)</summary>
         <span class="mono">{{ k.static_dependents | join(', ') }}</span></details>{% endif %}
     </td>
@@ -49,6 +59,12 @@
   {% endfor %}
   </tbody>
 </table>
+
+{% if r.excluded_units %}
+<h2>제외한 운영자 경로</h2>
+<p class="muted">{{ r.exclusion_note }}</p>
+<ul>{% for e in r.excluded_units %}<li>{{ e.unit }}: 변경 패키지 관련 레코드 {{ e.records }}건</li>{% endfor %}</ul>
+{% endif %}
 
 <h2>근거 미해결 항목</h2>
 <p class="muted">경로 미확정·RPM 미소유·다른 mount namespace 파일. 영향 없음으로 처리하지 않으며 사람이 확인해야 합니다.</p>

@@ -354,7 +354,13 @@ func (c *Collector) handle(raw []byte) {
 	if e.ParentStartNs != 0 {
 		rec.ParentKey = c.procs.keyOf(e.PPID, procfs.NsToTicks(e.ParentStartNs))
 	}
-	if isNew || p.unitSource == "" {
+	if u := unitFromEvent(e); u != "" {
+		// 커널이 이벤트 시점에 본 cgroup. 프로세스가 다른 unit 으로 옮겨질 수 있어 이벤트마다 갱신
+		p.unit, p.unitSource = u, "cgroup_kernel"
+		if isNew {
+			c.procs.fillNS(p)
+		}
+	} else if isNew || p.unitSource == "" {
 		c.procs.fillUnit(p, e.PPID, procfs.NsToTicks(e.ParentStartNs))
 	}
 	rec.Unit, rec.UnitSource = p.unit, p.unitSource
@@ -421,10 +427,30 @@ func (c *Collector) handle(raw []byte) {
 				c.delta.IdentFail++
 			}
 		} else {
-			rec.File = c.resolveByID(id, p)
+			rec.File = c.resolveByIDEv(e, id, p)
 		}
 		c.appendAggregated(rec)
 	}
+}
+
+// unitFromEvent 는 이벤트 시점의 cgroup leaf 이름으로 systemd unit 을 정한다.
+// (단기 프로세스도 종료 전에 커널에서 읽으므로 /proc/PID/cgroup 보다 정확)
+func unitFromEvent(e bpfload.Event) string {
+	for _, n := range []string{e.CgroupDfl, e.CgroupPids} {
+		if isUnitName(n) {
+			return n
+		}
+	}
+	return ""
+}
+
+func isUnitName(n string) bool {
+	for _, suf := range []string{".service", ".scope", ".socket", ".mount", ".timer"} {
+		if strings.HasSuffix(n, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collector) resolveExec(e bpfload.Event, id procfs.DevIno, p *procInfo) *model.FileRef {
@@ -449,7 +475,7 @@ func (c *Collector) resolveExec(e bpfload.Event, id procfs.DevIno, p *procInfo) 
 		f.RequestedPath = e.Path
 		return f
 	}
-	f := c.resolveByID(id, p)
+	f := c.resolveByIDEv(e, id, p)
 	f.RequestedPath = e.Path
 	return f
 }
@@ -466,6 +492,13 @@ func (c *Collector) resolveOpen(e bpfload.Event, id procfs.DevIno, ok bool, p *p
 		}
 		return f
 	}
+	// 상대 경로(dirfd 기준)는 사용자 공간에서 dirfd 가 이미 닫혀 있을 수 있으므로 커널 경로를 먼저 사용
+	if !strings.HasPrefix(e.Path, "/") {
+		if f := c.kpathRef(e, id, p); f != nil {
+			f.RequestedPath = e.Path
+			return f
+		}
+	}
 	if absOK && verify(abs, id) {
 		// 심볼릭 링크(/lib64/libc.so.6 등)는 실제 파일 경로로 확정, 요청 경로는 따로 보존
 		real := abs
@@ -479,13 +512,38 @@ func (c *Collector) resolveOpen(e bpfload.Event, id procfs.DevIno, ok bool, p *p
 		}
 		return f
 	}
-	f := c.resolveByID(id, p)
+	f := c.resolveByIDEv(e, id, p)
 	f.RequestedPath = e.Path
 	return f
 }
 
-// resolveByID: 프로세스 maps → 세션 inode 색인 → 인벤토리 inode 순서로 경로를 찾는다.
+// kpathRef 는 커널이 이벤트 시점에 본 dentry 경로를 후보로 사용한다.
+//   - 호스트 mount namespace 프로세스만 (다른 ns 의 루트 기준 경로는 호스트 경로가 아님)
+//   - 지금 stat 한 dev/ino 가 이벤트와 같을 때만 확정 (교체·삭제된 파일 혼합 방지)
+//   - 이벤트 시점에 이미 삭제(nlink=0)였다면 deleted 로 표시하고 현재 경로로 해석하지 않음
+func (c *Collector) kpathRef(e bpfload.Event, id procfs.DevIno, p *procInfo) *model.FileRef {
+	if e.KPath == "" || p.otherNS {
+		return nil
+	}
+	if e.KFlags&bpfload.KFNlinkZero != 0 {
+		return c.res.fileRef(e.KPath, model.PathKernel, id, true, p.otherNS)
+	}
+	if !verify(e.KPath, id) {
+		return nil
+	}
+	c.res.remember(id, e.KPath)
+	return c.res.fileRef(e.KPath, model.PathKernel, id, false, p.otherNS)
+}
+
+// resolveByID: 커널 경로 → 프로세스 maps → 세션 inode 색인 → 인벤토리 inode 순서로 경로를 찾는다.
 func (c *Collector) resolveByID(id procfs.DevIno, p *procInfo) *model.FileRef {
+	return c.resolveByIDEv(bpfload.Event{}, id, p)
+}
+
+func (c *Collector) resolveByIDEv(e bpfload.Event, id procfs.DevIno, p *procInfo) *model.FileRef {
+	if f := c.kpathRef(e, id, p); f != nil {
+		return f
+	}
 	if path, del, ok := c.procs.lookupMapped(p, id); ok {
 		return c.res.fileRef(path, model.PathKernel, id, del, p.otherNS)
 	}

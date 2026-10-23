@@ -2,9 +2,13 @@
 /*
  * PatchScope 수집 프로그램 (CO-RE, tracepoint 기반)
  *  - sched_process_exec / sched_process_exit : 실행·종료 이력
- *  - sys_{enter,exit}_openat (+ open)        : 성공/실패한 파일 열기, 성공 시 dev/inode
- *  - sys_{enter,exit}_mmap                   : 파일 기반 매핑의 dev/inode, prot
+ *  - sys_{enter,exit}_openat (+ open)        : 성공/실패한 파일 열기, 성공 시 dev/inode + 커널 경로
+ *  - sys_{enter,exit}_mmap                   : 파일 기반 매핑의 dev/inode, prot + 커널 경로
+ *  - 모든 이벤트: 이벤트 시점의 cgroup leaf 이름 (systemd unit 귀속)
  * 전달은 RHEL 8 호환을 위해 perf event array 를 사용한다.
+ * RHEL 8(4.18) 검증기는 bounded loop 를 지원하지 않을 수 있어 루프는 모두 unroll 한다.
+ *
+ * 커널 경로(kpath)는 후보일 뿐이며, 사용자 공간에서 stat(dev,ino) 일치를 확인한 경우에만 확정한다.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -16,6 +20,9 @@ char LICENSE[] SEC("license") = "GPL";
 #define PS_AT_FDCWD       -100
 #define PS_MAP_ANONYMOUS  0x20
 #define PS_MAX_ERRNO      4095
+#define PS_MAX_DEPTH      24
+#define PS_NAME_MAX       128  /* 이름 1개 최대 복사 길이 */
+#define PS_KPATH_OFF_MASK 255  /* 시작 오프셋 상한: 255 + 128 < 512 */
 
 /* 사용자 공간에서 로드 전에 설정: 에이전트 자신의 이벤트 제외 */
 volatile const __u32 agent_tgid = 0;
@@ -104,6 +111,80 @@ static __always_inline __u64 proc_start_ns(struct task_struct *task)
 	return BPF_CORE_READ(old, real_start_time);
 }
 
+/* ---------------------------------------------------------------- cgroup */
+
+static __always_inline void cgroup_names(struct task_struct *task, struct ps_event *e)
+{
+	struct css_set *cs = BPF_CORE_READ(task, cgroups);
+	const char *name;
+
+	/* cgroup v2 (AL2023) : default hierarchy leaf */
+	name = BPF_CORE_READ(cs, dfl_cgrp, kn, name);
+	if (name)
+		bpf_probe_read_kernel_str(e->cg_dfl, sizeof(e->cg_dfl), name);
+
+	/* cgroup v1 (RHEL 8) : systemd 가 unit 별로 만드는 pids 계층 */
+	if (bpf_core_enum_value_exists(enum cgroup_subsys_id, pids_cgrp_id)) {
+		int id = bpf_core_enum_value(enum cgroup_subsys_id, pids_cgrp_id);
+		struct cgroup_subsys_state *css = NULL;
+
+		if (id >= 0 && id < 16) {
+			bpf_probe_read_kernel(&css, sizeof(css), &cs->subsys[id & 15]);
+			if (css) {
+				name = BPF_CORE_READ(css, cgroup, kn, name);
+				if (name)
+					bpf_probe_read_kernel_str(e->cg_pids, sizeof(e->cg_pids), name);
+			}
+		}
+	}
+}
+
+/* ---------------------------------------------------------------- file */
+
+/* dentry 를 루트 방향으로 올라가며 이름을 leaf 부터 NUL 구분으로 기록. 마운트 경계는 mnt_parent 로 이동. */
+static __always_inline void kernel_path(struct file *f, struct ps_event *e)
+{
+	struct dentry *d = BPF_CORE_READ(f, f_path.dentry);
+	struct vfsmount *vmnt = BPF_CORE_READ(f, f_path.mnt);
+	struct mount *mnt = container_of(vmnt, struct mount, mnt);
+	__u32 off = 0;
+	int i;
+
+#pragma unroll
+	for (i = 0; i < PS_MAX_DEPTH; i++) {
+		struct dentry *mnt_root = BPF_CORE_READ(mnt, mnt.mnt_root);
+		struct dentry *parent = BPF_CORE_READ(d, d_parent);
+
+		if (d == mnt_root || d == parent) {
+			struct mount *mp = BPF_CORE_READ(mnt, mnt_parent);
+
+			if (d != mnt_root || mp == mnt) {
+				/* 마운트 트리(네임스페이스) 루트 */
+				e->kflags |= PS_KF_KPATH_COMPLETE;
+				break;
+			}
+			d = BPF_CORE_READ(mnt, mnt_mountpoint);
+			mnt = mp;
+			continue;
+		}
+		if (off > PS_KPATH_OFF_MASK) {
+			e->kflags |= PS_KF_KPATH_TRUNCATED;
+			break;
+		}
+		const unsigned char *name = BPF_CORE_READ(d, d_name.name);
+		long n = bpf_probe_read_kernel_str(&e->kpath[off & PS_KPATH_OFF_MASK], PS_NAME_MAX, name);
+		if (n <= 0) {
+			e->kflags |= PS_KF_KPATH_TRUNCATED;
+			break;
+		}
+		off += n; /* n 은 NUL 포함 */
+		d = parent;
+	}
+	if (i == PS_MAX_DEPTH)
+		e->kflags |= PS_KF_KPATH_TRUNCATED;
+	e->kpath_len = off;
+}
+
 static __always_inline void file_ident(struct file *f, struct ps_event *e)
 {
 	struct inode *in = BPF_CORE_READ(f, f_inode);
@@ -115,6 +196,9 @@ static __always_inline void file_ident(struct file *f, struct ps_event *e)
 	e->ino = BPF_CORE_READ(in, i_ino);
 	e->dev = BPF_CORE_READ(in, i_sb, s_dev);
 	e->has_ident = 1;
+	if (BPF_CORE_READ(in, __i_nlink) == 0)
+		e->kflags |= PS_KF_NLINK_ZERO;
+	kernel_path(f, e);
 }
 
 static __always_inline void fd_ident(struct task_struct *task, long fd, struct ps_event *e)
@@ -162,8 +246,14 @@ static __always_inline struct ps_event *new_event(__u32 type, struct task_struct
 	e->prot = 0;
 	e->dfd = 0;
 	e->has_ident = 0;
+	e->kflags = 0;
+	e->kpath_len = 0;
 	e->path[0] = 0;
+	e->kpath[0] = 0;
+	e->cg_dfl[0] = 0;
+	e->cg_pids[0] = 0;
 	bpf_get_current_comm(&e->comm, sizeof(e->comm));
+	cgroup_names(task, e);
 
 	*task_out = task;
 	return e;

@@ -110,6 +110,9 @@ def coverage(sessions) -> dict:
     }
 
 
+# 운영자 작업 경로(SSM 원격 명령·세션). 업무 서비스 의존성과 섞이지 않도록 기본 제외하고 건수만 표시.
+# amazon-ssm-agent 자체 프로세스는 별도 unit 이 아니므로 함께 제외됨 → 결과에 명시.
+OPERATOR_UNITS = ("amazon-ssm-agent.service",)
 DIRECT_KINDS = ("exec", "process", "mapped_file", "file_mmap")
 ACCESS_KINDS = ("file_open", "open_fd")
 
@@ -126,6 +129,7 @@ def analyze(conn, plan_row: dict) -> dict:
     from_nevras = [i["from_nevra"] for i in pkg_items if i.get("from_nevra")]
 
     # 변경 RPM 이 소유한 파일을 사용한 증거 (경로 확정 + rpm 소유)
+    excl_units = list(plan_row.get("exclude_units") or OPERATOR_UNITS)
     evidence = conn.execute(
         """SELECT r.id, r.kind, r.source, r.ts_utc, r.last_ts_utc, r.count, r.proc_key, r.pid, r.comm,
                   r.unit, r.unit_source, r.path, r.path_status, r.ok, r.perms, r.prot, p.nevra
@@ -133,9 +137,14 @@ def analyze(conn, plan_row: dict) -> dict:
            WHERE r.session_id = ANY(%s) AND r.ownership IN ('rpm','deleted') AND p.nevra = ANY(%s)
              AND r.path_status NOT IN ('unresolved','requested_only')
              AND (r.kind <> 'file_open' OR r.ok)
+             AND (r.unit IS NULL OR NOT r.unit = ANY(%s))
            ORDER BY r.ts_utc""",
-        (sids, from_nevras),
+        (sids, from_nevras, excl_units),
     ).fetchall()
+    excluded = conn.execute(
+        """SELECT r.unit, count(*) AS n FROM records r
+           WHERE r.session_id = ANY(%s) AND r.unit = ANY(%s) AND r.packages && %s GROUP BY 1""",
+        (sids, excl_units, from_nevras)).fetchall()
 
     by_pkg: dict[str, dict] = {}
     for it in pkg_items:
@@ -203,6 +212,9 @@ def analyze(conn, plan_row: dict) -> dict:
         "services": [{"unit": u, "packages": sorted(s["packages"]), "processes": sorted(s["processes"])}
                      for u, s in sorted(services.items())],
         "unresolved": unresolved,
+        "excluded_units": [{"unit": e["unit"], "records": e["n"]} for e in excluded],
+        "exclusion_note": "운영자 원격 명령 경로(SSM)는 업무 의존성과 섞이지 않도록 제외했습니다. "
+                          "SSM agent 자체도 함께 제외되므로 해당 서비스 영향은 별도로 확인하세요.",
         "kernel": kernel_section(conn, plan, v, sids),
         "disclaimer": "관측 기반 영향 후보이며 패치 후 호환성·무중단을 보장하지 않습니다. "
                       "no_observation 은 해당 기간에 관측된 연결이 없다는 뜻이며 안전·미사용 판정이 아닙니다.",
@@ -210,6 +222,7 @@ def analyze(conn, plan_row: dict) -> dict:
 
 
 def summarize(groups: dict) -> list[dict]:
+    """(unit, 프로세스 인스턴스) 단위로 근거를 묶는다. 모든 인스턴스를 보존 (화면에서만 일부 표시)."""
     out = []
     for (unit, proc_key), evs in groups.items():
         kinds = sorted({e["kind"] for e in evs})
