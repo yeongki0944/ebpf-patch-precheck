@@ -18,7 +18,10 @@ import (
 	"github.com/yeongki0944/ebpf-patch-precheck/code/agent/internal/procfs"
 )
 
-const nevraFmt = `%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}`
+const (
+	nevraFmt       = `%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}`
+	nevraRepeatFmt = `%{=NAME}-%{=EPOCHNUM}:%{=VERSION}-%{=RELEASE}.%{=ARCH}`
+)
 
 type Package struct {
 	NEVRA    string   `json:"nevra"`
@@ -108,7 +111,8 @@ func (inv *Inventory) loadPackages() error {
 }
 
 func (inv *Inventory) loadFiles() error {
-	out, err := exec.Command("rpm", "-qa", "--qf", "[%{FILENAMES}\t"+nevraFmt+"\n]").Output()
+	// 배열 반복([...]) 안의 스칼라 태그는 %{=TAG} 로 써야 줄마다 반복된다
+	out, err := exec.Command("rpm", "-qa", "--qf", "[%{FILENAMES}\t"+nevraRepeatFmt+"\n]").Output()
 	if err != nil {
 		return fmt.Errorf("rpm -qa filenames: %w", err)
 	}
