@@ -8,6 +8,7 @@ echo "commit=$(git rev-parse --short HEAD)"
 patchscope-admin init
 systemctl restart patchscope-server
 sleep 2
-curl -fsS --cacert /etc/patchscope-server/ca.crt "https://$(hostname -f)/api/v1/health" || \
-  curl -fsS --cacert /etc/patchscope-server/ca.crt "https://$(curl -s -H "X-aws-ec2-metadata-token: $(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/local-hostname)/api/v1/health"
+T=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+PDNS=$(curl -s -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/local-hostname)
+curl -fsS --cacert /etc/patchscope-server/ca.crt "https://$PDNS/api/v1/health"
 echo

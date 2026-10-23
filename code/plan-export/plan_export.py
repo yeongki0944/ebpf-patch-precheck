@@ -91,16 +91,19 @@ def main():
     base = dnf.Base()
     conf = base.conf
     conf.read()
+    conf.substitutions.update_from_etc(conf.installroot)
+    # RHUI 등은 dnf 플러그인이 $REGION 같은 변수를 채우므로 CLI 와 같이 플러그인을 로드
+    base.init_plugins()
+    base.pre_configure_plugins()
     if a.releasever:
         conf.releasever = a.releasever
+        conf.substitutions["releasever"] = a.releasever
     # 시스템 캐시와 분리. 거래는 실행하지 않음
     work = tempfile.mkdtemp(prefix="patchscope-plan-")
     conf.cachedir = work
     conf.assumeyes = False
-    conf.substitutions.update_from_etc(conf.installroot)
-    if a.releasever:
-        conf.substitutions["releasever"] = a.releasever
     base.read_all_repos()
+    base.configure_plugins()
     base.fill_sack(load_system_repo=True, load_available_repos=True)
 
     if a.kernel:
