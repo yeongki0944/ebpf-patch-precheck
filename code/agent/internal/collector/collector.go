@@ -673,6 +673,9 @@ func (c *Collector) flush(reason string, final bool) {
 		Policy:        c.Policy(),
 		Records:       c.records,
 	}
+	if b.Records == nil {
+		b.Records = []model.Record{} // JSON null 대신 []
+	}
 	b.Delta = c.delta
 	b.Total = c.total
 	b.Total.Add(c.delta)

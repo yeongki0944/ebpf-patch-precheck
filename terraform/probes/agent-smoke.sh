@@ -4,6 +4,10 @@ set -uo pipefail
 A=/opt/patchscope/bin/patchscope-agent
 SP=/var/lib/patchscope/smoke-spool
 rm -rf "$SP"
+# 상주 에이전트가 시험용 에이전트(및 그 rpm 자식)를 관측하지 않도록 시험 중에는 중지 후 복구
+WAS_ACTIVE=$(systemctl is-active patchscope-agent 2>/dev/null || true)
+[ "$WAS_ACTIVE" = active ] && systemctl stop patchscope-agent
+trap '[ "$WAS_ACTIVE" = active ] && systemctl start patchscope-agent' EXIT
 echo "=== precheck"
 $A precheck --spool "$SP" | grep -vE '^\s+\[OK' ; echo "rc=$?"
 
@@ -33,7 +37,7 @@ recs, batches, caps, invs = [], [], [], []
 for f in sorted(glob.glob(sys.argv[1] + "/*.json")):
     d = json.load(open(f))
     kind = f.split("/")[-1].split("-")[1]
-    if kind == "batch": batches.append(d); recs += d["records"]
+    if kind == "batch": batches.append(d); recs += d["records"] or []
     elif kind == "capability": caps.append(d)
     elif kind == "inventory": invs.append(d)
 print("batches=%d records=%d caps=%s inv_pkgs=%s" % (len(batches), len(recs),
@@ -60,7 +64,8 @@ check("open /etc/os-release ok + owner", any(r["ok"] and r["file"]["ownership"] 
 fail = find("file_open", lambda r: req(r) == "/etc/patchscope-no-such-file")
 check("failed open recorded separately", any(not r["ok"] and r["errno"] == 2 and r["file"]["path_status"] == "requested_only" for r in fail))
 rel = find("file_open", lambda r: req(r) == "./hostname")
-check("relative path resolved (live process)", any(path(r) == "/etc/hostname" and r["file"]["path_status"] == "verified" for r in rel),
+check("relative path resolved (live+short process)",
+      sum(path(r) == "/etc/hostname" and r["file"]["path_status"] in ("verified", "kernel") for r in rel) >= 2,
       [(r["comm"], path(r), r["file"]["path_status"]) for r in rel])
 check("relative path never guessed", all(path(r) in ("", "/etc/hostname") for r in rel))
 import re
@@ -91,7 +96,11 @@ check("agent self/rpm child excluded", len(agent_self) == 0, len(agent_self))
 lossy = [b["batch_id"] for b in batches if not b["complete"]]
 check("no event loss (or loss flagged incomplete)", all((b["delta"]["perf_lost"] + b["delta"]["kernel_output_fail"] == 0) == b["complete"] for b in batches),
       {"incomplete_batches": lossy})
-check("no event loss in smoke workload", not lossy, t.get("perf_lost", 0))
+check("no event loss in smoke workload", not lossy, {k: t.get(k, 0) for k in ("perf_lost", "kernel_output_fail", "queue_drop")})
+kp = [r for r in recs if (r.get("file") or {}).get("path_status") == "kernel" and r["source"] == "ebpf"]
+check("kernel path used for ebpf events", len(kp) > 0, len(kp))
+cg = collections.Counter(r.get("unit_source") for r in recs if r["source"] == "ebpf")
+check("unit from kernel cgroup", cg.get("cgroup_kernel", 0) > 0, dict(cg))
 own = collections.Counter((r.get("file") or {}).get("ownership") for r in recs if r.get("file"))
 print("ownership:", dict(own))
 print("path_status:", dict(collections.Counter((r.get("file") or {}).get("path_status") for r in recs if r.get("file"))))
