@@ -99,8 +99,10 @@ type Record struct {
 // Counters 는 수집 손실·품질 지표. 손실 항목이 0 이 아니면 해당 구간은 불완전.
 type Counters struct {
 	EventsReceived   uint64 `json:"events_received"`
-	KernelOutputFail uint64 `json:"kernel_output_fail"` // 손실: perf 출력 실패
-	PerfLost         uint64 `json:"perf_lost"`          // 손실: perf buffer overwrite
+	// perf buffer 가 가득 차면 커널은 출력 실패(-ENOSPC)와 LOST 레코드를 함께 남기므로
+	// 아래 두 값은 같은 손실을 양쪽에서 센 것일 수 있다. 손실 판정에는 max 를 쓴다.
+	KernelOutputFail uint64 `json:"kernel_output_fail"` // 손실: bpf_perf_event_output 실패
+	PerfLost         uint64 `json:"perf_lost"`          // 손실: 사용자 공간에서 본 LOST 샘플
 	InflightFull     uint64 `json:"inflight_full"`      // 손실: enter/exit 연결 map 포화
 	QueueDrop        uint64 `json:"queue_drop"`         // 손실: 사용자 공간 큐 포화
 	FollowupDrop     uint64 `json:"followup_drop"`      // 손실: exec 후속 maps 조회 큐 포화

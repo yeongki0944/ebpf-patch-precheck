@@ -63,7 +63,9 @@ rel = find("file_open", lambda r: req(r) == "./hostname")
 check("relative path resolved (live process)", any(path(r) == "/etc/hostname" and r["file"]["path_status"] == "verified" for r in rel),
       [(r["comm"], path(r), r["file"]["path_status"]) for r in rel])
 check("relative path never guessed", all(path(r) in ("", "/etc/hostname") for r in rel))
-libc = [r for r in recs if r["kind"] in ("file_mmap", "file_open", "mapped_file") and "libc.so" in path(r)
+import re
+libc = [r for r in recs if r["kind"] in ("file_mmap", "file_open", "mapped_file")
+        and re.search(r"/libc(\.so|-[0-9.]+\.so)", path(r))  # AL2023: libc.so.6, RHEL8: libc-2.28.so
         and r.get("comm") in ("curl", "cat", "openssl")]
 check("libc mapped/opened by short process, rpm owner", any(r["file"]["ownership"] == "rpm" for r in libc),
       sorted({(path(r), tuple(r["file"].get("packages") or [])) for r in libc})[:1])
@@ -81,6 +83,10 @@ snap = find("process", lambda r: r.get("unit") == "sshd.service" or r.get("unit"
 check("snapshot unit attribution (cgroup)", len(snap) >= 1, [(r["comm"], r["unit"]) for r in snap[:2]])
 agent_self = [r for r in recs if r.get("comm") in ("patchscope-agen", "rpm") and r["source"] == "ebpf"]
 check("agent self/rpm child excluded", len(agent_self) == 0, len(agent_self))
+lossy = [b["batch_id"] for b in batches if not b["complete"]]
+check("no event loss (or loss flagged incomplete)", all((b["delta"]["perf_lost"] + b["delta"]["kernel_output_fail"] == 0) == b["complete"] for b in batches),
+      {"incomplete_batches": lossy})
+check("no event loss in smoke workload", not lossy, t.get("perf_lost", 0))
 own = collections.Counter((r.get("file") or {}).get("ownership") for r in recs if r.get("file"))
 print("ownership:", dict(own))
 print("path_status:", dict(collections.Counter((r.get("file") or {}).get("path_status") for r in recs if r.get("file"))))

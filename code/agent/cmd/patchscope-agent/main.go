@@ -169,7 +169,8 @@ func cmdRun(args []string) {
 	batchEvery := fs.Duration("batch", 10*time.Second, "batch interval")
 	reconEvery := fs.Duration("reconcile", 60*time.Second, "/proc reconcile interval")
 	invEvery := fs.Duration("inventory-check", 60*time.Second, "RPM inventory change check interval")
-	perCPU := fs.Int("perf-pages", 64, "perf buffer pages per CPU")
+	// 64 pages(256KiB) 에서 AL2023 스모크 시험 중 burst 손실 확인 -> 1MiB/CPU 기본
+	perCPU := fs.Int("perf-pages", 256, "perf buffer pages per CPU (power of 2)")
 	queue := fs.Int("queue", 65536, "user-space event queue size")
 	excl := fs.String("exclude-paths", "/proc/,/sys/,/dev/", "comma separated path prefixes to drop for file events")
 	exclComm := fs.String("exclude-comms", "", "comma separated comm names to drop for file_open")
