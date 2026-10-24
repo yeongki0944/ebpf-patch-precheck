@@ -4,11 +4,30 @@
 {% include "_host_head.html" %}
 <div class="crumbs"><a href="/hosts/{{ h.host_id }}/services?session={{ sid }}">서비스 의존성</a> › {{ unit }}</div>
 <h2 style="margin-top:.25rem">{{ unit }}</h2>
+{% set n_exec = pk | selectattr('executed') | list | length %}
+{% set n_upd = pk | selectattr('update_to') | list | length %}
 <div class="stats">
   <div class="stat gray"><div class="n">{{ pk | length }}</div><div class="l">사용한 RPM 패키지</div></div>
-  <div class="stat gray"><div class="n">{{ pk | selectattr('executed') | list | length }}</div><div class="l">실행·매핑 근거 있음</div></div>
+  <div class="stat red"><div class="n">{{ n_exec }}</div><div class="l">실행·메모리 매핑</div></div>
+  <div class="stat amber"><div class="n">{{ pk | length - n_exec }}</div><div class="l">파일 열기만</div></div>
+  <div class="stat {{ 'purple' if n_upd else 'gray' }}"><div class="n">{{ n_upd if has_updates else '-' }}</div><div class="l">업데이트 대기 {% if not has_updates %}(목록 미확인){% endif %}</div></div>
   <div class="stat gray"><div class="n">{{ procs | map(attribute='n') | sum }}</div><div class="l">프로세스 인스턴스</div></div>
 </div>
+
+<section class="card map-card" aria-labelledby="mapH">
+  <div class="page-head" style="align-items:center">
+    <h3 id="mapH" style="margin:0">의존성 맵</h3>
+    <div class="map-legend small" aria-hidden="true">
+      <span><i class="lg-svc"></i>서비스</span><span><i class="lg-proc"></i>프로세스</span>
+      <span><i class="lg-exec"></i>실행·매핑</span><span><i class="lg-file"></i>파일 열기만</span>
+      <span><i class="lg-upd"></i>업데이트 대기</span>
+    </div>
+  </div>
+  <p class="muted small" style="margin:.25rem 0 .5rem">가운데가 서비스, 안쪽이 프로세스, 바깥이 사용한 RPM 패키지입니다. 노드에 마우스를 올리면 버전·근거가 보이고, 누르면 아래 표의 해당 행으로 이동합니다.
+    {% if vmap.shown < vmap.total %}<strong>패키지가 많아 {{ vmap.shown }}/{{ vmap.total }}개만 그렸습니다.</strong>{% endif %}</p>
+  <div class="map-wrap">{{ vmap.svg | safe }}</div>
+</section>
+
 <p class="small muted">프로세스: {% for p in procs %}{{ p.comm }} ×{{ p.n }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
 
 <div class="toolbar"><input type="search" placeholder="패키지·파일 검색 (예: openssl, libxml2)" data-filter="#pkT" aria-label="패키지 검색"></div>
@@ -16,8 +35,9 @@
   <thead><tr><th scope="col">패키지</th><th scope="col">근거</th><th scope="col">프로세스</th><th scope="col">파일</th><th scope="col">기간</th></tr></thead>
   <tbody>
   {% for p in pk %}
-  <tr>
-    <td><strong>{{ p.name }}</strong><br><span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span></td>
+  <tr id="pkg-{{ p.name }}" {% if p.update_to %}class="row-upd"{% endif %}>
+    <td><strong>{{ p.name }}</strong><br><span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span>
+      {% if p.update_to %}<br><span class="badge b-purple">업데이트 대기 → {{ p.update_to }}</span>{% endif %}</td>
     <td>{% if p.executed %}<span class="badge b-red">실행·매핑</span>{% else %}<span class="badge b-amber">파일 열기만</span>{% endif %}
         <br><span class="small muted">{{ p.kinds | join(', ') }}</span></td>
     <td class="small">{{ p.comms[:4] | join(', ') }}</td>

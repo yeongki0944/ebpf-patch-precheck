@@ -33,6 +33,29 @@
       upd();
     });
   });
+  // 카드(details) 필터: <input data-filter-cards="#container">  — 일치하면 펼침
+  document.querySelectorAll('input[data-filter-cards]').forEach(function (inp) {
+    var box = document.querySelector(inp.getAttribute('data-filter-cards'));
+    if (!box) return;
+    inp.addEventListener('input', function () {
+      var q = inp.value.trim().toLowerCase();
+      box.querySelectorAll(':scope > details').forEach(function (d) {
+        var hit = !q || d.textContent.toLowerCase().indexOf(q) >= 0;
+        d.hidden = !hit;
+        if (q && hit) d.open = true;
+      });
+    });
+  });
+  // 모두 펼치기/접기: <button data-toggle-all="#container">
+  document.querySelectorAll('[data-toggle-all]').forEach(function (btn) {
+    var box = document.querySelector(btn.getAttribute('data-toggle-all'));
+    if (!box) return;
+    btn.addEventListener('click', function () {
+      var ds = box.querySelectorAll(':scope > details:not([hidden])');
+      var anyClosed = Array.prototype.some.call(ds, function (d) { return !d.open; });
+      ds.forEach(function (d) { d.open = anyClosed; });
+    });
+  });
   // 진행 중 작업이 있으면 자동 새로고침: <meta name="ps-refresh" content="5">
   var m = document.querySelector('meta[name=ps-refresh]');
   if (m) setTimeout(function () { location.reload(); }, parseInt(m.content, 10) * 1000);

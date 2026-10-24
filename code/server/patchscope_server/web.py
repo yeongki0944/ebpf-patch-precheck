@@ -5,6 +5,7 @@
 import csv
 import io
 import json
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import analysis, auth, db, tasks
+from . import analysis, auth, db, tasks, viz
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -229,10 +230,19 @@ def service_detail(host_id: str, unit: str, session: str, request: Request, user
             """SELECT comm, count(DISTINCT proc_key) AS n, min(ts_utc) AS first FROM records
                WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s AND proc_key IS NOT NULL GROUP BY 1 ORDER BY 2 DESC""",
             (session, u)).fetchall()
+        upd_row = conn.execute("SELECT updates FROM available_updates WHERE host_id = %s", (host_id,)).fetchone()
     for p in pk:
         p["name"] = analysis.nevra_name(p["nevra"])
         p["executed"] = bool(set(p["kinds"]) & {"exec", "process", "mapped_file", "file_mmap"})
-    return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs, tab="services")
+        p["comms"] = [c for c in (p["comms"] or []) if c]
+    updates = {u["name"]: u["to_nevra"] for u in (upd_row["updates"] if upd_row else [])}
+    for p in pk:
+        p["update_to"] = viz.evr(updates[p["name"]], p["name"]) if p["name"] in updates else None
+    # 업데이트 대기 → 실행·매핑 → 이름 순
+    pk.sort(key=lambda p: (p["update_to"] is None, not p["executed"], p["name"]))
+    vmap = viz.service_map(unit, pk, procs, updates)
+    return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs,
+                  vmap=vmap, has_updates=bool(upd_row), tab="services")
 
 
 # ---------------------------------------------------------------- plans
@@ -439,18 +449,53 @@ def compare(host_id: str, request: Request, before: str | None = None, after: st
         b, bdeps, bfails, bexits = snap(before)
         a, adeps, afails, aexits = snap(after)
 
-    def by_name(rows):
+    groups = build_compare_groups(bdeps, adeps)
+    return render(request, "compare.html", h=h, periods=ps, b=b, a=a, groups=groups,
+                  bfails=bfails, afails=afails, bexits=bexits, aexits=aexits, tab="compare")
+
+
+# 실행할 때마다 이름이 바뀌는 임시 unit: 같은 서비스로 비교할 수 없으므로 따로 묶는다
+TRANSIENT = re.compile(r"^(session-c?\d+\.scope|run-r[0-9a-f]+\.(service|scope)|patchscope-plan-\d+\.scope|"
+                       r"user(-runtime-dir)?@\d+\.service)$")
+
+
+def build_compare_groups(bdeps, adeps) -> dict:
+    """서비스별 전후 비교. 반환: {'changed': [...], 'same': [...], 'only_before': [...], 'only_after': [...], 'transient': n}"""
+    def index(rows):
         out = {}
         for r in rows:
-            out.setdefault((r["unit"], analysis.nevra_name(r["nevra"])), set()).add(r["nevra"])
+            out.setdefault(r["unit"], {}).setdefault(analysis.nevra_name(r["nevra"]), set()).add(r["nevra"])
         return out
-    bm, am = by_name(bdeps), by_name(adeps)
-    changes = []
-    for k in sorted(set(bm) | set(am)):
-        bv, av = bm.get(k, set()), am.get(k, set())
-        if bv != av:
-            changes.append({"unit": k[0], "package": k[1], "before": sorted(bv), "after": sorted(av),
-                            "change": "추가" if not bv else "사라짐" if not av else "버전 변경"})
-    units = sorted({c["unit"] for c in changes})
-    return render(request, "compare.html", h=h, periods=ps, b=b, a=a, changes=changes, units=units,
-                  bfails=bfails, afails=afails, bexits=bexits, aexits=aexits, tab="compare")
+    bi, ai = index(bdeps), index(adeps)
+    res = {"changed": [], "same": [], "only_before": [], "only_after": [], "transient": 0}
+    for unit in sorted(set(bi) | set(ai)):
+        if TRANSIENT.match(unit):
+            res["transient"] += 1
+            continue
+        b, a = bi.get(unit, {}), ai.get(unit, {})
+        if not b or not a:
+            res["only_before" if b else "only_after"].append(
+                {"unit": unit, "packages": len(b or a), "names": sorted(b or a)[:12]})
+            continue
+        upgraded, downgraded, added, removed, same = [], [], [], [], 0
+        for name in sorted(set(b) | set(a)):
+            bv, av = b.get(name, set()), a.get(name, set())
+            if bv == av:
+                same += 1
+            elif not bv:
+                added.append({"name": name, "after": [viz.evr(x, name) for x in sorted(av)]})
+            elif not av:
+                removed.append({"name": name, "before": [viz.evr(x, name) for x in sorted(bv)]})
+            else:
+                item = {"name": name, "before": [viz.evr(x, name) for x in sorted(bv)],
+                        "after": [viz.evr(x, name) for x in sorted(av)]}
+                hi_a = max(av, key=viz.evr_key)
+                hi_b = max(bv, key=viz.evr_key)
+                item["direction"] = "up" if viz.evr_key(hi_a) >= viz.evr_key(hi_b) else "down"
+                (upgraded if item["direction"] == "up" else downgraded).append(item)
+        g = {"unit": unit, "upgraded": upgraded + downgraded, "added": added, "removed": removed, "same": same,
+             "total": len(set(b) | set(a))}
+        (res["changed"] if upgraded or downgraded or added or removed else res["same"]).append(g)
+    # 버전이 바뀐 서비스를 먼저, 그 다음 추가/사라짐이 많은 순
+    res["changed"].sort(key=lambda g: (-len(g["upgraded"]), -(len(g["added"]) + len(g["removed"])), g["unit"]))
+    return res
