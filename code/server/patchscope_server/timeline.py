@@ -42,14 +42,15 @@ def build(conn, host_id: str, name: str, unit: str | None) -> dict:
     prev = None
     versions = {}
     for r in invs:
-        cur = r["nevra"]
+        cur = r["nevra"] or ""          # 미설치 인벤토리는 "" 로 통일 (None/"" 차이로 거짓 변경 방지)
         if cur:
             versions.setdefault(cur, r["install_time"])
         if prev is not None and cur != prev:
-            events.append({"at": r["received_at"], "kind": "inventory", "title": "설치 버전 변경 감지",
-                           "from": viz.evr(prev, name) if prev else "(없음)", "to": viz.evr(cur, name) if cur else "(제거됨)",
+            events.append({"at": r["received_at"], "kind": "inventory",
+                           "title": "새로 설치 감지" if not prev else "제거 감지" if not cur else "설치 버전 변경 감지",
+                           "from": viz.evr(prev, name) if prev else None, "to": viz.evr(cur, name) if cur else "(제거됨)",
                            "inv": r["inventory_id"]})
-        prev = cur if cur else ""
+        prev = cur
     # dnf 이력이 없으면 RPM 설치 시각으로 보조
     if not txs:
         for nev, it in versions.items():
