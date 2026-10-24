@@ -76,18 +76,70 @@ def kernel_info():
     return info
 
 
+def export_history(a, inv_id):
+    """dnf 거래 이력 (언제·누가·무엇을). 저장소 조회 없이 로컬 history DB 만 읽는다.
+    '누가'는 loginuid(로그인 세션 사용자) 기준이며, SSM·자동화처럼 로그인 세션이 없으면 비어 있다.
+    운영자는 dnf --comment 로 작업자·계획 번호를 남길 수 있다."""
+    import pwd
+    base = dnf.Base()
+    base.conf.read()
+    try:
+        old = base.history.old(limit=a.history) if a.history else base.history.old()
+    except TypeError:
+        old = base.history.old()
+        old = old[:a.history] if a.history else old
+    txs = []
+    for t in old:
+        uid = getattr(t, "loginuid", None)
+        user = None
+        if isinstance(uid, int) and 0 <= uid < 4294967295:
+            try:
+                user = pwd.getpwuid(uid).pw_name
+            except KeyError:
+                user = str(uid)
+        items = []
+        try:
+            pkgs = t.packages()
+        except Exception:
+            pkgs = []
+        for i in pkgs:
+            try:
+                nev = "%s-%s:%s-%s.%s" % (i.name, i.epoch or 0, i.version, i.release, i.arch)
+            except Exception:
+                continue
+            act = getattr(i, "action_name", None) or str(getattr(i, "action", ""))
+            items.append({"name": i.name, "nevra": nev, "action": act})
+        txs.append({"tid": t.tid, "begin": getattr(t, "beg_timestamp", None), "end": getattr(t, "end_timestamp", None),
+                    "loginuid": uid if isinstance(uid, int) else None, "user": user,
+                    "cmdline": getattr(t, "cmdline", None), "comment": getattr(t, "comment", None) or None,
+                    "return_code": getattr(t, "return_code", None), "releasever": getattr(t, "releasever", None),
+                    "items": items})
+    out = {"schema_version": SCHEMA_VERSION, "host_id": machine_id(), "inventory_id": inv_id,
+           "generated_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z", "transactions": txs}
+    s = json.dumps(out, ensure_ascii=False)
+    if a.output == "-":
+        print(s)
+    else:
+        open(a.output, "w").write(s + "\n")
+    base.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("packages", nargs="*")
     ap.add_argument("--releasever", help="AL2023 목표 releasever (예: latest, 2023.12.20261021)")
     ap.add_argument("--kernel", action="store_true", help="kernel plan")
     ap.add_argument("--list-updates", action="store_true", help="업데이트 가능 목록만 출력")
+    ap.add_argument("--history", type=int, metavar="N", help="dnf 거래 이력 최근 N건 출력 (읽기 전용)")
     ap.add_argument("-o", "--output", default="-")
     a = ap.parse_args()
 
     if os.geteuid() != 0:
         sys.exit("root required (rpmdb read + repo metadata)")
     inv_before = inventory_id()
+    if a.history is not None:
+        export_history(a, inv_before)
+        return
 
     base = dnf.Base()
     conf = base.conf

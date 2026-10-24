@@ -90,6 +90,7 @@ func (s *Sender) Wake() {
 var endpoints = map[string]string{
 	"capability": "/api/v1/capability",
 	"inventory":  "/api/v1/inventory",
+	"history":    "/api/v1/history",
 	"batch":      "/api/v1/batches",
 }
 

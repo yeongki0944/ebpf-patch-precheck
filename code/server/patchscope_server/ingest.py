@@ -3,7 +3,7 @@
 중복 제거: batch_id 가 PK. 이미 있으면 409 (에이전트는 409 를 성공으로 보고 spool 에서 삭제).
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -95,10 +95,12 @@ async def inventory(request: Request, agent_id: str = Depends(require_agent)):
         if cur.rowcount == 0:
             return JSONResponse({"ok": True, "duplicate": True}, status_code=409)
         with conn.cursor() as c:
-            with c.copy("COPY inventory_packages (host_id, inventory_id, nevra, name, epoch, version, release, arch, requires, provides) FROM STDIN") as cp:
+            with c.copy("COPY inventory_packages (host_id, inventory_id, nevra, name, epoch, version, release, arch, requires, provides, install_time) FROM STDIN") as cp:
                 for p in pkgs:
+                    it = p.get("install_time")
                     cp.write_row((host["host_id"], inv_id, p["nevra"], p["name"], p.get("epoch"), p.get("version"),
-                                  p.get("release"), p.get("arch"), p.get("requires") or [], p.get("provides") or []))
+                                  p.get("release"), p.get("arch"), p.get("requires") or [], p.get("provides") or [],
+                                  datetime.fromtimestamp(it, tz=timezone.utc) if it else None))
     return {"ok": True, "packages": len(pkgs)}
 
 
@@ -185,6 +187,32 @@ async def batches(request: Request, agent_id: str = Depends(require_agent)):
              "reason": b.get("reason"), "sid": b["session_id"]},
         )
     return {"ok": True, "records": len(recs)}
+
+
+@router.post("/history")
+async def history(request: Request, agent_id: str = Depends(require_agent)):
+    d = await read_json(request)
+    host = check_agent(d, agent_id)
+    hist = d.get("history") or {}
+    if hist.get("host_id") != host["host_id"]:
+        raise HTTPException(400, "history host_id mismatch")
+    txs = hist.get("transactions") or []
+    n = 0
+    with db.connect() as conn:
+        upsert_host(conn, agent_id, host)
+        for t in txs[:500]:
+            if not isinstance(t.get("tid"), int):
+                continue
+            ts = lambda v: datetime.fromtimestamp(v, tz=timezone.utc) if isinstance(v, (int, float)) and v > 0 else None
+            cur = conn.execute(
+                """INSERT INTO pkg_transactions (host_id, tid, begin_at, end_at, loginuid, username, cmdline, comment,
+                     return_code, releasever, items)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (host_id, tid) DO NOTHING""",
+                (host["host_id"], t["tid"], ts(t.get("begin")), ts(t.get("end")), t.get("loginuid"),
+                 (t.get("user") or None), (t.get("cmdline") or "")[:2000] or None, (t.get("comment") or "")[:2000] or None,
+                 t.get("return_code"), t.get("releasever"), json.dumps(t.get("items") or [])))
+            n += cur.rowcount
+    return {"ok": True, "new": n}
 
 
 @router.get("/health")

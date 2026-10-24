@@ -47,7 +47,7 @@ def evr_key(nevra: str):
 
 
 def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str, str],
-                static_only: list[dict] | None = None) -> dict:
+                static_only: list[dict] | None = None, link_base: str = "#pkg-", link_qs: str = "") -> dict:
     """pk: name, nevra, executed, comms / procs: comm, n / updates: name -> 목표 nevra.
     static_only: 정적 의존으로만 연결된 패키지 (name, via=[관측 패키지 → ...]) - 바깥 링에 회색으로 표시."""
     comms = [p["comm"] for p in procs if p["comm"]][:12] or ["(process)"]
@@ -102,7 +102,7 @@ def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str,
         ring = (f'<circle cx="{x:.1f}" cy="{y:.1f}" r="9.5" fill="none" stroke="{COL_UPD}" stroke-width="2.5"/>' if upd else "")
         weight = ' font-weight="700"' if upd else ""
         out.append(
-            f'<a href="#pkg-{escape(p["name"])}"><title>{tip}</title>{ring}'
+            f'<a href="{escape(link_base + p["name"])}{escape(link_qs)}"><title>{tip}</title>{ring}'
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5.5" fill="{col}"/>'
             f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="11" dominant-baseline="middle" text-anchor="{anchor}"'
             f' transform="rotate({rot:.1f} {lx:.1f} {ly:.1f})" fill="{"#4c1d95" if upd else "#1f2933"}"{weight}>{label}</text></a>')

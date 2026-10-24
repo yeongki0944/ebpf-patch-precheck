@@ -41,13 +41,15 @@
   {% for p in pk %}
   <tr id="pkg-{{ p.name }}" {% if p.update_to %}class="row-upd"{% endif %}>
     <td style="min-width:260px">
+      {% set tl = '/hosts/' ~ h.host_id ~ '/packages/' ~ p.name ~ '?' ~ ({'unit': unit, 'session': sid} | urlencode) %}
       {% if p.ndeps %}
       <details class="dep-root" data-deps-url="/hosts/{{ h.host_id }}/deps?{{ {'session': sid, 'unit': unit, 'name': p.name, 'path': p.name} | urlencode }}">
-        <summary><strong>{{ p.name }}</strong> <span class="dep-more">+ 의존 {{ p.ndeps }}</span></summary>
+        <summary><a class="pkg-link" href="{{ tl }}" title="변경 이력 보기"><strong>{{ p.name }}</strong></a> <span class="dep-more">+ 의존 {{ p.ndeps }}</span></summary>
         <div class="deps-body"><span class="muted small">불러오는 중…</span></div>
       </details>
-      {% else %}<strong>{{ p.name }}</strong>{% endif %}
+      {% else %}<a class="pkg-link" href="{{ tl }}" title="변경 이력 보기"><strong>{{ p.name }}</strong></a>{% endif %}
       <span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span>
+      <a class="small" href="{{ tl }}">변경 이력 →</a>
       {% if p.update_to %}<br><span class="badge b-purple">업데이트 대기 → {{ p.update_to }}</span>{% endif %}</td>
     <td>{% if p.executed %}<span class="badge b-red">실행·매핑</span>{% else %}<span class="badge b-amber">파일 열기만</span>{% endif %}
         <br><span class="small muted">{{ p.kinds | join(', ') }}</span></td>

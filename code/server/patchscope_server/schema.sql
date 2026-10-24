@@ -196,3 +196,25 @@ CREATE TABLE IF NOT EXISTS available_updates (
 );
 
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS default_releasever text;
+
+-- dnf 거래 이력 (에이전트가 인벤토리 변경 시 함께 전송). 호스트 + tid 로 중복 제거
+CREATE TABLE IF NOT EXISTS pkg_transactions (
+    host_id     text NOT NULL REFERENCES hosts ON DELETE CASCADE,
+    tid         bigint NOT NULL,
+    begin_at    timestamptz,
+    end_at      timestamptz,
+    loginuid    bigint,
+    username    text,
+    cmdline     text,
+    comment     text,
+    return_code int,
+    releasever  text,
+    items       jsonb NOT NULL,
+    received_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (host_id, tid)
+);
+CREATE INDEX IF NOT EXISTS pkg_transactions_items ON pkg_transactions USING gin (items jsonb_path_ops);
+
+-- 계획 → 실제 적용 연결 (사용자 확인용, 자동 판정은 패키지·버전 일치로만)
+ALTER TABLE patch_plans ADD COLUMN IF NOT EXISTS applied_tid bigint;
+ALTER TABLE inventory_packages ADD COLUMN IF NOT EXISTS install_time timestamptz;

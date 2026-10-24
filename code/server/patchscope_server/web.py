@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from urllib.parse import urlencode
 
-from . import analysis, auth, db, deps, tasks, viz
+from . import analysis, auth, db, deps, tasks, timeline, viz
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -259,9 +259,22 @@ def service_detail(host_id: str, unit: str, session: str, request: Request, user
             static_only.append({"name": name, "via": chain, "evr": viz.evr(node["nevras"][0], name),
                                 "update_to": viz.evr(updates[name], name) if name in updates else None})
         static_only.sort(key=lambda s: (s["update_to"] is None, s["name"]))
-    vmap = viz.service_map(unit, pk, procs, updates, static_only)
+    vmap = viz.service_map(unit, pk, procs, updates, static_only,
+                           link_base=f"/hosts/{host_id}/packages/", link_qs="?" + urlencode({"unit": unit, "session": session}))
     return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs,
                   vmap=vmap, has_updates=bool(upd_row), static_only=static_only, inv_id=inv_id, tab="services")
+
+
+@router.get("/hosts/{host_id}/packages/{name}", response_class=HTMLResponse)
+def package_timeline(host_id: str, name: str, request: Request, unit: str | None = None, session: str | None = None,
+                     user=Depends(auth.require_user)):
+    """패키지 하나의 변경 타임라인: 계획 → dnf 설치(누가·명령) → 버전 변경 감지 → 서비스 반영(관측) → 재부팅."""
+    if not re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", name):
+        raise HTTPException(400)
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        t = timeline.build(conn, host_id, name, unit)
+    return render(request, "package_timeline.html", h=h, t=t, sid=session, tab="services")
 
 
 def session_inventory(conn, session_id: str) -> str | None:

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -113,10 +114,12 @@ func cmdInventory(args []string) {
 
 // sink 는 collector 출력을 spool 에 저장하고 sender 를 깨운다.
 type sink struct {
-	sp    *spool.Spool
-	seq   *uint64
-	wake  func()
-	agent string
+	sp       *spool.Spool
+	seq      *uint64
+	wake     func()
+	agent    string
+	host     model.HostInfo
+	planTool string
 }
 
 func (s *sink) next() uint64 { *s.seq++; return *s.seq }
@@ -127,6 +130,30 @@ func (s *sink) PutBatch(b *model.Batch) error {
 	}
 	s.wake()
 	return nil
+}
+
+// PutHistory 는 dnf 거래 이력(읽기 전용 조회)을 spool 에 넣는다. 도구가 없거나 실패하면 건너뛴다.
+func (s *sink) PutHistory(invID string) {
+	if s.planTool == "" {
+		return
+	}
+	if _, err := os.Stat(s.planTool); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, s.planTool, "--history", "50", "-o", "-").Output()
+	if err != nil || !json.Valid(out) {
+		log.Printf("history export: %v", err)
+		return
+	}
+	msg := map[string]any{"schema_version": model.SchemaVersion, "agent_id": s.agent, "host": s.host,
+		"history": json.RawMessage(out)}
+	if err := s.sp.Put(s.next(), "history", invID, msg); err != nil {
+		log.Printf("spool history: %v", err)
+		return
+	}
+	s.wake()
 }
 
 type inventoryMsg struct {
@@ -142,6 +169,8 @@ func (s *sink) PutInventory(inv *rpminv.Inventory, host model.HostInfo) error {
 		return err
 	}
 	s.wake()
+	// 인벤토리가 바뀌는 시점(시작·패치) 마다 거래 이력도 함께 보낸다 (언제·누가·무엇을)
+	go s.PutHistory(inv.ID)
 	return nil
 }
 
@@ -195,7 +224,7 @@ func cmdRun(args []string) {
 		log.Fatalf("spool: %v", err)
 	}
 	seq := sp.MaxSeq()
-	sk := &sink{sp: sp, seq: &seq, wake: func() {}, agent: *agentID}
+	sk := &sink{sp: sp, seq: &seq, wake: func() {}, agent: *agentID, host: host, planTool: *planTool}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

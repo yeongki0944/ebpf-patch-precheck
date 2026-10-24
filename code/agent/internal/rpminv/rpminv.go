@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +31,9 @@ type Package struct {
 	Version  string   `json:"version"`
 	Release  string   `json:"release"`
 	Arch     string   `json:"arch"`
-	Requires []string `json:"requires,omitempty"`
-	Provides []string `json:"provides,omitempty"`
+	Requires    []string `json:"requires,omitempty"`
+	Provides    []string `json:"provides,omitempty"`
+	InstallTime int64    `json:"install_time,omitempty"` // RPM DB 설치 시각 (unix)
 }
 
 // Inventory 는 특정 시점의 RPM DB 스냅샷.
@@ -81,7 +83,7 @@ func Load() (*Inventory, error) {
 
 func (inv *Inventory) loadPackages() error {
 	// 패키지 헤더 줄 뒤에 R/P 줄이 이어진다
-	q := "@\t" + nevraFmt + "\t%{NAME}\t%{EPOCHNUM}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n" +
+	q := "@\t" + nevraFmt + "\t%{NAME}\t%{EPOCHNUM}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\t%{INSTALLTIME}\n" +
 		"[R\t%{REQUIRENEVRS}\n][P\t%{PROVIDENEVRS}\n]"
 	out, err := exec.Command("rpm", "-qa", "--qf", q).Output()
 	if err != nil {
@@ -93,12 +95,13 @@ func (inv *Inventory) loadPackages() error {
 	for sc.Scan() {
 		f := strings.Split(sc.Text(), "\t")
 		switch {
-		case f[0] == "@" && len(f) == 7:
+		case f[0] == "@" && len(f) == 8:
 			if f[1] == "gpg-pubkey-0:" || strings.HasPrefix(f[2], "gpg-pubkey") {
 				cur = nil
 				continue
 			}
-			inv.Packages = append(inv.Packages, Package{NEVRA: f[1], Name: f[2], Epoch: f[3], Version: f[4], Release: f[5], Arch: f[6]})
+			it, _ := strconv.ParseInt(f[7], 10, 64)
+			inv.Packages = append(inv.Packages, Package{NEVRA: f[1], Name: f[2], Epoch: f[3], Version: f[4], Release: f[5], Arch: f[6], InstallTime: it})
 			cur = &inv.Packages[len(inv.Packages)-1]
 		case cur != nil && f[0] == "R" && len(f) == 2 && !strings.HasPrefix(f[1], "rpmlib("):
 			cur.Requires = append(cur.Requires, f[1])

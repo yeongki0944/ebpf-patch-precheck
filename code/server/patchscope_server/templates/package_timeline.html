@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ t.name }} 변경 이력 · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<div class="crumbs">
+  <a href="/hosts/{{ h.host_id }}/services">서비스 의존성</a>
+  {% if t.unit %}› <a href="/hosts/{{ h.host_id }}/services/detail?unit={{ t.unit | urlencode }}&session={{ sid }}">{{ t.unit }}</a>{% endif %}
+  › {{ t.name }}
+</div>
+<h2 style="margin-top:.25rem">{{ t.name }} <span class="muted small" style="font-weight:400">변경 이력{% if t.unit %} · {{ t.unit }} 기준{% endif %}</span></h2>
+
+<div class="stats">
+  <div class="stat gray"><div class="n mono" style="font-size:1rem">{{ t.installed or '미설치' }}</div><div class="l">현재 설치 버전</div></div>
+  {% if t.unit %}<div class="stat {{ 'red' if t.restart_needed else 'green' }}"><div class="n mono" style="font-size:1rem">{{ t.in_use or '관측 없음' }}</div>
+    <div class="l">{{ t.unit }} 가 마지막으로 사용한 버전</div></div>{% endif %}
+  <div class="stat {{ 'purple' if t.update_to else 'gray' }}"><div class="n mono" style="font-size:1rem">{{ t.update_to or '없음' }}</div><div class="l">업데이트 가능</div></div>
+</div>
+{% if t.restart_needed %}
+<div class="notice bad"><strong>재시작 필요 가능성:</strong> 설치 버전({{ t.installed }})과 {{ t.unit }} 가 마지막으로 사용한 버전({{ t.in_use }})이 다릅니다.
+  서비스를 재시작하기 전까지 이전 버전 라이브러리가 메모리에 남아 있을 수 있습니다.</div>
+{% endif %}
+{% if not t.history_received %}<div class="notice warn small">이 서버의 dnf 거래 이력이 아직 수신되지 않아 "누가·어떤 명령으로"는 표시되지 않습니다. 에이전트가 다음 인벤토리 변경 때 전송합니다.</div>{% endif %}
+
+{% if t.usage | length > 0 %}
+<h3>버전별 사용 기간 ({{ t.unit }})</h3>
+<div class="usage-bars">
+{% for u in t.usage %}
+  <div class="ub {{ 'ub-cur' if u.version == t.installed else 'ub-old' }}">
+    <span class="mono">{{ u.version }}</span>
+    <span class="small muted">{{ u['first'] | ts(tz) }} ~ {{ u['last'] | ts(tz) }}</span>
+    {% if u.version == t.installed %}<span class="badge b-green">현재 설치 버전</span>{% else %}<span class="badge b-gray">이전 버전</span>{% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endif %}
+
+<h3>타임라인</h3>
+<div class="legend" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+  <div><span class="tl-ico k-plan">계획</span> 패치 계획·영향 분석</div>
+  <div><span class="tl-ico k-dnf">설치</span> dnf 거래 (누가·명령)</div>
+  <div><span class="tl-ico k-inventory">감지</span> 설치 버전 변경 감지</div>
+  <div><span class="tl-ico k-observe">반영</span> 서비스가 새 버전 사용 (관측)</div>
+  <div><span class="tl-ico k-boot">부팅</span> 재부팅</div>
+</div>
+<ol class="timeline">
+{% for e in t.events | reverse %}
+  <li class="tl k-{{ e.kind }}">
+    <div class="tl-time">{{ e.at | ts(tz) }}<br><span class="muted small">{{ e.at | ago }}</span></div>
+    <div class="tl-body">
+      <div class="tl-title"><span class="tl-ico k-{{ e.kind }}">{{ {'plan':'계획','dnf':'설치','rpm':'설치','inventory':'감지','observe':'반영','boot':'부팅'}[e.kind] }}</span>
+        <strong>{{ e.title }}</strong>
+        {% if e.plan_id %}<a href="/plans/{{ e.plan_id }}">영향 분석 보기</a>{% endif %}</div>
+      {% if e['from'] or e.to %}
+      <div class="tl-ver">{% if e['from'] %}<span class="ver old">{{ e['from'] }}</span><span class="arrow">→</span>{% endif %}<span class="ver new">{{ e.to or '' }}</span></div>
+      {% endif %}
+      <dl class="kv small">
+        {% if e.who %}<dt>누가</dt><dd>{{ e.who }}</dd>{% endif %}
+        {% if e.cmd %}<dt>명령</dt><dd class="mono">{{ e.cmd }}</dd>{% endif %}
+        {% if e.comment %}<dt>메모</dt><dd>{{ e.comment }}</dd>{% endif %}
+        {% if e.label %}<dt>계획 이름</dt><dd>{{ e.label }}</dd>{% endif %}
+        {% if e.tid %}<dt>dnf 거래</dt><dd>#{{ e.tid }}{% if e.others %} · 같은 거래의 다른 패키지 {{ e.others }}개{% endif %}{% if e.rc not in (none, 0) %} · <span class="badge b-red">실패 rc={{ e.rc }}</span>{% endif %}</dd>{% endif %}
+        {% if e.procs %}<dt>프로세스</dt><dd>{{ e.procs }}개 인스턴스{% if e.deleted %} · 교체 전 파일(deleted) 사용 포함{% endif %}</dd>{% endif %}
+        {% if e.inv %}<dt>인벤토리</dt><dd class="mono">{{ e.inv }}</dd>{% endif %}
+      </dl>
+    </div>
+  </li>
+{% else %}<li class="empty">기록된 이벤트가 없습니다.</li>{% endfor %}
+</ol>
+<p class="muted small">"누가"는 dnf 가 기록한 로그인 사용자(loginuid)입니다. SSM 원격 명령·자동화는 로그인 세션이 없어 비어 있을 수 있으며, 이때는 <code>dnf --comment</code> 로 작업자를 남기면 표시됩니다.
+  "반영"은 eBPF·/proc 관측으로만 판단하며, 관측 기간 밖의 사용은 알 수 없습니다.</p>
+{% endblock %}
