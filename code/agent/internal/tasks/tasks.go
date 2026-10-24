@@ -147,7 +147,16 @@ func (p *Poller) execute(ctx context.Context, t Task) (json.RawMessage, error) {
 	}
 	c, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(c, p.Tool, t.Args()...)
+	// dnf 계산은 메모리를 수백 MB 사용한다. 에이전트 cgroup(MemoryMax) 안에서 돌면 OOM 으로 함께 죽을 수 있으므로
+	// 별도 transient scope 에서 자체 상한으로 실행한다. systemd-run 이 없으면 직접 실행.
+	name, args := p.Tool, t.Args()
+	if sr, err := exec.LookPath("systemd-run"); err == nil {
+		args = append([]string{"--scope", "--quiet", "--collect",
+			"--unit", fmt.Sprintf("patchscope-plan-%d", t.ID),
+			"-p", "MemoryMax=1G", "-p", "CPUQuota=100%", "--nice=10", "--", p.Tool}, args...)
+		name = sr
+	}
+	cmd := exec.CommandContext(c, name, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
