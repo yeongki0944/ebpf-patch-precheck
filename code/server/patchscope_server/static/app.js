@@ -56,6 +56,17 @@
       ds.forEach(function (d) { d.open = anyClosed; });
     });
   });
+  // 의존 트리: <details data-deps-url> 를 펼칠 때 한 단계씩 불러온다 (중첩 포함, 이벤트 위임)
+  document.addEventListener('toggle', function (e) {
+    var d = e.target;
+    if (!d.matches || !d.matches('details[data-deps-url]') || !d.open || d.dataset.loaded) return;
+    d.dataset.loaded = '1';
+    var body = d.querySelector(':scope > .deps-body');
+    fetch(d.getAttribute('data-deps-url'), { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) { body.innerHTML = html; })
+      .catch(function (err) { body.textContent = '불러오지 못했습니다 (' + err.message + '). 다시 펼쳐 보세요.'; delete d.dataset.loaded; });
+  }, true);
   // 진행 중 작업이 있으면 자동 새로고침: <meta name="ps-refresh" content="5">
   var m = document.querySelector('meta[name=ps-refresh]');
   if (m) setTimeout(function () { location.reload(); }, parseInt(m.content, 10) * 1000);

@@ -14,7 +14,9 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from . import analysis, auth, db, tasks, viz
+from urllib.parse import urlencode
+
+from . import analysis, auth, db, deps, tasks, viz
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -240,9 +242,65 @@ def service_detail(host_id: str, unit: str, session: str, request: Request, user
         p["update_to"] = viz.evr(updates[p["name"]], p["name"]) if p["name"] in updates else None
     # 업데이트 대기 → 실행·매핑 → 이름 순
     pk.sort(key=lambda p: (p["update_to"] is None, not p["executed"], p["name"]))
-    vmap = viz.service_map(unit, pk, procs, updates)
+
+    # 정적 의존 (관측 패키지가 RPM Requires 로 더 끌어오는 패키지)
+    with db.connect() as conn:
+        inv_id = session_inventory(conn, session)
+        g = deps.graph(conn, host_id, inv_id) if inv_id else None
+    static_only = []
+    if g:
+        observed = {p["name"] for p in pk}
+        for p in pk:
+            p["ndeps"] = len(deps.children(g, p["name"]))
+        for name, chain in sorted(deps.closure(g, observed).items()):
+            if name in observed:
+                continue
+            node = g["pkgs"][name]
+            static_only.append({"name": name, "via": chain, "evr": viz.evr(node["nevras"][0], name),
+                                "update_to": viz.evr(updates[name], name) if name in updates else None})
+        static_only.sort(key=lambda s: (s["update_to"] is None, s["name"]))
+    vmap = viz.service_map(unit, pk, procs, updates, static_only)
     return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs,
-                  vmap=vmap, has_updates=bool(upd_row), tab="services")
+                  vmap=vmap, has_updates=bool(upd_row), static_only=static_only, inv_id=inv_id, tab="services")
+
+
+def session_inventory(conn, session_id: str) -> str | None:
+    """관측 기간의 마지막 인벤토리 (패키지 변경이 있었으면 최신 기준)."""
+    r = conn.execute("SELECT inventory_ids FROM sessions WHERE session_id = %s", (session_id,)).fetchone()
+    return (r["inventory_ids"] or [None])[-1] if r else None
+
+
+@router.get("/hosts/{host_id}/deps", response_class=HTMLResponse)
+def deps_fragment(host_id: str, name: str, session: str, unit: str, request: Request, path: str = "",
+                  user=Depends(auth.require_user)):
+    """의존 트리 한 단계 (펼칠 때 불러오는 HTML 조각)."""
+    if not re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", name):
+        raise HTTPException(400)
+    with db.connect() as conn:
+        host_or_404(conn, host_id)
+        inv_id = session_inventory(conn, session)
+        if not inv_id:
+            raise HTTPException(404)
+        g = deps.graph(conn, host_id, inv_id)
+        u = None if unit == "(서비스 미확인)" else unit
+        observed = {analysis.nevra_name(r["p"]) for r in conn.execute(
+            """SELECT DISTINCT p FROM records, unnest(packages) p
+               WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s AND ownership IN ('rpm','deleted')""", (session, u))}
+        upd_row = conn.execute("SELECT updates FROM available_updates WHERE host_id = %s", (host_id,)).fetchone()
+    updates = {x["name"]: x["to_nevra"] for x in (upd_row["updates"] if upd_row else [])}
+    node = g["pkgs"].get(name)
+    ancestors = set(filter(None, path.split(",")))
+    kids = []
+    for k in deps.children(g, name):
+        kn = g["pkgs"][k]
+        kids.append({"name": k, "evr": viz.evr(kn["nevras"][0], k), "observed": k in observed,
+                     "update_to": viz.evr(updates[k], k) if k in updates else None,
+                     "ndeps": len(kn["deps"]), "cycle": k in ancestors,
+                     "reqs": sorted(node["deps"][k])[:5]})
+    kids.sort(key=lambda k: (not k["observed"], k["update_to"] is None, k["name"]))
+    base = f"/hosts/{host_id}/deps?" + urlencode({"session": session, "unit": unit})
+    return templates.TemplateResponse(request, "_deps.html", {
+        "node": node, "kids": kids, "base": base, "path": path or name, "depth": len(ancestors)})
 
 
 # ---------------------------------------------------------------- plans

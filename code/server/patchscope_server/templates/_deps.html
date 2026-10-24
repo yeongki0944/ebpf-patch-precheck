@@ -1,0 +1,27 @@
+{# 의존 트리 한 단계 (fetch 로 삽입되는 조각). 변수: node, kids, base, path, depth #}
+{% if not node %}
+<p class="muted small">이 관측 기간의 설치 패키지 목록에서 찾지 못했습니다.</p>
+{% else %}
+{% if kids %}
+<ul class="deptree">
+{% for k in kids %}
+<li class="{{ 'obs' if k.observed else 'stat' }}">
+  {% if k.cycle %}
+    <span class="dep-row"><span class="dep-name">{{ k.name }}</span> <span class="badge b-gray">↻ 위에서 이미 펼침</span></span>
+  {% elif k.ndeps and depth < 8 %}
+    <details data-deps-url="{{ base }}&{{ {'name': k.name, 'path': path ~ ',' ~ k.name} | urlencode }}">
+      <summary class="dep-row">{% include "_dep_label.html" %} <span class="dep-more">+ 의존 {{ k.ndeps }}</span></summary>
+      <div class="deps-body"><span class="muted small">불러오는 중…</span></div>
+    </details>
+  {% else %}
+    <span class="dep-row dep-leaf">{% include "_dep_label.html" %}{% if k.ndeps %} <span class="muted small">(깊이 제한)</span>{% endif %}</span>
+  {% endif %}
+</li>
+{% endfor %}
+</ul>
+{% else %}<p class="muted small" style="margin:.25rem 0 .25rem 1.5rem">다른 설치 패키지에 대한 의존이 없습니다.</p>{% endif %}
+{% if node.unresolved %}
+<details class="small" style="margin-left:1.5rem"><summary class="muted">해석하지 않은 요구 {{ node.unresolved | length }}개</summary>
+  <span class="mono">{{ node.unresolved[:30] | join(', ') }}</span></details>
+{% endif %}
+{% endif %}

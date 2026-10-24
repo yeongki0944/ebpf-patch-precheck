@@ -21,10 +21,14 @@
       <span><i class="lg-svc"></i>서비스</span><span><i class="lg-proc"></i>프로세스</span>
       <span><i class="lg-exec"></i>실행·매핑</span><span><i class="lg-file"></i>파일 열기만</span>
       <span><i class="lg-upd"></i>업데이트 대기</span>
+      {% if vmap.static_total %}<span><i class="lg-stat"></i>정적 의존만 (바깥 링)</span>{% endif %}
     </div>
   </div>
-  <p class="muted small" style="margin:.25rem 0 .5rem">가운데가 서비스, 안쪽이 프로세스, 바깥이 사용한 RPM 패키지입니다. 노드에 마우스를 올리면 버전·근거가 보이고, 누르면 아래 표의 해당 행으로 이동합니다.
-    {% if vmap.shown < vmap.total %}<strong>패키지가 많아 {{ vmap.shown }}/{{ vmap.total }}개만 그렸습니다.</strong>{% endif %}</p>
+  <p class="muted small" style="margin:.25rem 0 .5rem">가운데가 서비스, 안쪽이 프로세스, 그 바깥이 사용이 관측된 RPM 패키지입니다.
+    {% if vmap.static_total %}가장 바깥 점선 링은 그 패키지들이 RPM 의존으로 더 필요로 하지만 사용은 관측되지 않은 패키지입니다.{% endif %}
+    노드에 마우스를 올리면 버전·근거가 보이고, 관측 패키지를 누르면 아래 표로 이동합니다(표의 <strong>+</strong> 로 의존 트리를 펼칠 수 있습니다).
+    {% if vmap.shown < vmap.total %}<strong>관측 패키지가 많아 {{ vmap.shown }}/{{ vmap.total }}개만 그렸습니다.</strong>{% endif %}
+    {% if vmap.static_shown < vmap.static_total %}<strong>정적 의존 {{ vmap.static_shown }}/{{ vmap.static_total }}개만 그렸습니다.</strong>{% endif %}</p>
   <div class="map-wrap">{{ vmap.svg | safe }}</div>
 </section>
 
@@ -36,7 +40,14 @@
   <tbody>
   {% for p in pk %}
   <tr id="pkg-{{ p.name }}" {% if p.update_to %}class="row-upd"{% endif %}>
-    <td><strong>{{ p.name }}</strong><br><span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span>
+    <td style="min-width:260px">
+      {% if p.ndeps %}
+      <details class="dep-root" data-deps-url="/hosts/{{ h.host_id }}/deps?{{ {'session': sid, 'unit': unit, 'name': p.name, 'path': p.name} | urlencode }}">
+        <summary><strong>{{ p.name }}</strong> <span class="dep-more">+ 의존 {{ p.ndeps }}</span></summary>
+        <div class="deps-body"><span class="muted small">불러오는 중…</span></div>
+      </details>
+      {% else %}<strong>{{ p.name }}</strong>{% endif %}
+      <span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span>
       {% if p.update_to %}<br><span class="badge b-purple">업데이트 대기 → {{ p.update_to }}</span>{% endif %}</td>
     <td>{% if p.executed %}<span class="badge b-red">실행·매핑</span>{% else %}<span class="badge b-amber">파일 열기만</span>{% endif %}
         <br><span class="small muted">{{ p.kinds | join(', ') }}</span></td>
@@ -47,6 +58,24 @@
   {% else %}<tr><td colspan="5" class="empty">RPM 소유 파일 사용 근거가 없습니다.</td></tr>{% endfor %}
   </tbody>
 </table></div>
+
+{% if static_only %}
+{% set su = static_only | selectattr('update_to') | list %}
+<h3>정적 의존으로만 연결된 패키지 ({{ static_only | length }})</h3>
+<p class="small muted">위 패키지들이 RPM 의존(Requires)으로 더 필요로 하는 설치 패키지 중, 이 서비스에서 사용이 관측되지 않은 것입니다.
+  설치·업그레이드 시 함께 영향을 받을 수 있지만 실제로 로딩·실행되었다는 뜻은 아닙니다. 기준 인벤토리 <span class="mono">{{ inv_id }}</span>.
+  {% if su %}<strong>그중 업데이트 대기 {{ su | length }}개.</strong>{% endif %}</p>
+<details class="card" {% if su %}open{% endif %}><summary>목록과 연결 경로 보기</summary>
+<div class="toolbar"><input type="search" placeholder="패키지 검색" data-filter="#stT" aria-label="정적 의존 검색"></div>
+<div class="table-wrap"><table id="stT">
+  <thead><tr><th scope="col">패키지</th><th scope="col">버전</th><th scope="col">연결 경로 (관측 패키지 → … → 이 패키지)</th></tr></thead>
+  <tbody>{% for s in static_only %}
+  <tr {% if s.update_to %}class="row-upd"{% endif %}><td><strong>{{ s.name }}</strong>{% if s.update_to %}<br><span class="badge b-purple">업데이트 대기 → {{ s.update_to }}</span>{% endif %}</td>
+    <td class="mono small">{{ s.evr }}</td>
+    <td class="small"><span class="dep-path">{% for v in s.via %}<span class="badge b-red">{{ v }}</span> → {% endfor %}<span class="badge b-gray">{{ s.name }}</span></span></td></tr>
+  {% endfor %}</tbody>
+</table></div></details>
+{% endif %}
 
 {% if other %}
 <h3>RPM 으로 설명되지 않는 파일</h3>

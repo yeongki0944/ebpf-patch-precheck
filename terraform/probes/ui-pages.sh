@@ -17,6 +17,16 @@ for H in $(q "SELECT host_id FROM hosts ORDER BY hostname"); do
     c=$(code "$U/hosts/$H/services/detail?unit=$unit&session=$S")
     echo "$N $unit: $c bytes=$(wc -c < /tmp/ps-page) svg=$(grep -c '<svg' /tmp/ps-page) nodes=$(grep -o '<circle' /tmp/ps-page | wc -l) upd=$(grep -o 'b-purple' /tmp/ps-page | wc -l)"
   done
+  code "$U/hosts/$H/services/detail?unit=php-fpm.service&session=$S" >/dev/null
+  echo "$N php-fpm: plus=$(grep -o 'class="dep-root"' /tmp/ps-page | wc -l) static_only=$(grep -o 'id="stT"' /tmp/ps-page | wc -l) static_rows=$(sed -n '/id="stT"/,/<\/table>/p' /tmp/ps-page | grep -c '<tr')"
+  DURL=$(grep -o 'data-deps-url="[^"]*name=php8.1-common[^"]*"\|data-deps-url="[^"]*name=php-common[^"]*"' /tmp/ps-page | head -1 | sed 's/data-deps-url="//; s/"$//; s/&amp;/\&/g')
+  if [ -n "$DURL" ]; then
+    c=$(code "$U$DURL"); echo "  deps L1 $c: kids=$(grep -o '<li class=' /tmp/ps-page | wc -l) obs=$(grep -o "class=\"obs\"" /tmp/ps-page | wc -l) more=$(grep -o 'data-deps-url' /tmp/ps-page | wc -l)"
+    grep -o 'class="dep-name">[^<]*' /tmp/ps-page | sed 's/.*>//' | head -15 | paste -sd' '
+    D2=$(grep -o 'data-deps-url="[^"]*"' /tmp/ps-page | head -1 | sed 's/data-deps-url="//; s/"$//; s/&amp;/\&/g')
+    [ -n "$D2" ] && { c=$(code "$U$D2"); echo "  deps L2 $c: kids=$(grep -o '<li class=' /tmp/ps-page | wc -l) cycle=$(grep -c '이미 펼침' /tmp/ps-page)"; }
+  fi
+  echo "  bad name: $(code "$U/hosts/$H/deps?session=$S&unit=x&name=a%3Bb")"
   c=$(code "$U/hosts/$H/compare")
   echo "$N compare: $c bytes=$(wc -c < /tmp/ps-page) cards=$(grep -o 'class="card svc-chg"' /tmp/ps-page | wc -l) up=$(grep -o '<li class="up">' /tmp/ps-page | wc -l) add=$(grep -o '<li class="add">' /tmp/ps-page | wc -l) rm=$(grep -o '<li class="rm">' /tmp/ps-page | wc -l)"
   grep -o 'class="svc-name">[^<]*' /tmp/ps-page | sed 's/.*>//' | head -8 | paste -sd' '

@@ -1,0 +1,5 @@
+<span class="dep-dot {{ 'd-obs' if k.observed else 'd-stat' }}" aria-hidden="true"></span><span class="dep-name">{{ k.name }}</span>
+<span class="mono small muted">{{ k.evr }}</span>
+{% if k.observed %}<span class="badge b-red">이 서비스에서 사용 관측</span>{% else %}<span class="badge b-gray">정적 의존만</span>{% endif %}
+{% if k.update_to %}<span class="badge b-purple">업데이트 대기 → {{ k.update_to }}</span>{% endif %}
+<span class="sr">요구: {{ k.reqs | join(', ') }}</span>

@@ -113,6 +113,7 @@ details > summary { cursor: pointer; color: var(--brand); font-weight: 550; marg
 .lg-svc { background: #0f172a; border-radius: 3px !important; } .lg-proc { background: #1d4ed8; }
 .lg-exec { background: #d92d20; } .lg-file { background: #f79009; }
 .lg-upd { background: #fff; border: 2.5px solid #7c3aed; }
+.lg-stat { background: #fff; border: 2px solid #94a3b8; }
 tr.row-upd { background: #faf5ff; }
 tr:target { outline: 3px solid #93c5fd; outline-offset: -3px; }
 
@@ -149,3 +150,23 @@ tr:target { outline: 3px solid #93c5fd; outline-offset: -3px; }
 .chg-list .arrow { margin: 0 .35rem; color: #3b82f6; font-weight: 700; }
 .chg-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 1rem; padding-bottom: .5rem; }
 @media (max-width: 760px) { .svc-chg > summary { grid-template-columns: auto 1fr; } .bar { grid-column: 1 / -1; } }
+
+/* ---- 의존 트리 */
+.dep-root > summary, .deptree summary { list-style: none; cursor: pointer; color: var(--text); font-weight: 400; }
+.dep-root > summary::-webkit-details-marker, .deptree summary::-webkit-details-marker { display: none; }
+.dep-root > summary::before, .deptree summary::before {
+  content: "+"; display: inline-flex; justify-content: center; align-items: center; width: 1.15rem; height: 1.15rem;
+  border: 1px solid #94a3b8; border-radius: 4px; font-size: .8rem; font-weight: 700; color: #334155; margin-right: .35rem; background: #fff; }
+.dep-root[open] > summary::before, .deptree details[open] > summary::before { content: "−"; background: #e2e8f0; }
+.dep-more { color: var(--brand); font-size: .78rem; font-weight: 600; }
+.deps-body { margin: .25rem 0 .25rem .55rem; }
+.deptree { list-style: none; margin: 0; padding-left: 1rem; border-left: 2px solid #e2e8f0; }
+.deptree li { position: relative; padding: .12rem 0; }
+.deptree li::before { content: ""; position: absolute; left: -1rem; top: .85rem; width: .8rem; border-top: 2px solid #e2e8f0; }
+.dep-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem; font-size: .86rem; }
+.dep-leaf { padding-left: 1.5rem; }
+.dep-name { font-weight: 600; }
+.dep-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; }
+.d-obs { background: #d92d20; } .d-stat { background: #fff; border: 2px solid #94a3b8; }
+.deptree li.stat .dep-name { color: #475569; font-weight: 500; }
+.dep-path .badge { margin: .1rem 0; }

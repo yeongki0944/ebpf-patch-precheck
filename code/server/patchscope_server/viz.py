@@ -12,6 +12,7 @@ COL_PROC = "#1d4ed8"
 COL_SVC = "#0f172a"
 COL_UPD = "#7c3aed"     # 업데이트 대기
 MAX_PKG = 160
+MAX_STATIC = 120
 
 
 def evr(nevra: str, name: str | None = None) -> str:
@@ -45,8 +46,10 @@ def evr_key(nevra: str):
     return ((int(ep),), _vercmp_key(ver), _vercmp_key(rel))
 
 
-def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str, str]) -> dict:
-    """pk: name, nevra, executed, comms / procs: comm, n / updates: name -> 목표 nevra."""
+def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str, str],
+                static_only: list[dict] | None = None) -> dict:
+    """pk: name, nevra, executed, comms / procs: comm, n / updates: name -> 목표 nevra.
+    static_only: 정적 의존으로만 연결된 패키지 (name, via=[관측 패키지 → ...]) - 바깥 링에 회색으로 표시."""
     comms = [p["comm"] for p in procs if p["comm"]][:12] or ["(process)"]
     ci = {c: i for i, c in enumerate(comms)}
     pkgs = sorted(pk, key=lambda p: (min((ci.get(c, 99) for c in p["comms"] or []), default=99),
@@ -54,7 +57,8 @@ def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str,
     n = max(len(pkgs), 1)
     r2 = max(230.0, n * 15 / (2 * math.pi))
     r1 = r2 * 0.42 if len(comms) > 1 else 0.0
-    pad = 175
+    ring_gap = 165.0 if static_only else 0.0
+    pad = 175 + ring_gap
     size = 2 * (r2 + pad)
     cx = cy = size / 2
     out = []
@@ -103,6 +107,46 @@ def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str,
             f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="11" dominant-baseline="middle" text-anchor="{anchor}"'
             f' transform="rotate({rot:.1f} {lx:.1f} {ly:.1f})" fill="{"#4c1d95" if upd else "#1f2933"}"{weight}>{label}</text></a>')
 
+    # 정적 의존 링: 각 패키지를 처음 끌어온 관측 패키지 각도 근처에 배치
+    so = (static_only or [])[:MAX_STATIC]
+    if so:
+        angle_of = {p["name"]: a for p, a, _, _ in nodes}
+        r3 = r2 + ring_gap
+        by_parent: dict[str, list] = {}
+        for s in so:
+            by_parent.setdefault(s["via"][0] if s["via"] else "", []).append(s)
+        placed = []
+        for parent, items in by_parent.items():
+            base = angle_of.get(parent, -math.pi / 2)
+            spread = 2 * math.pi / max(n, 1) * 0.9
+            for j, s in enumerate(items):
+                off = (j - (len(items) - 1) / 2) * min(spread / max(len(items), 1), math.radians(3.2))
+                placed.append((s, base + off))
+        placed.sort(key=lambda t: t[1])
+        # 겹침 완화: 최소 각도 간격 보장
+        min_gap = 2 * math.pi / max(len(placed) * 1.15, 1)
+        for i in range(1, len(placed)):
+            if placed[i][1] - placed[i - 1][1] < min_gap:
+                placed[i] = (placed[i][0], placed[i - 1][1] + min_gap)
+        out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r3:.1f}" fill="none" stroke="#e2e8f0" stroke-dasharray="3 5"/>')
+        for s, a in placed:
+            x, y = cx + r3 * math.cos(a), cy + r3 * math.sin(a)
+            pa = angle_of.get(s["via"][0] if s["via"] else "", a)
+            sx, sy = cx + (r2 + 7) * math.cos(pa), cy + (r2 + 7) * math.sin(pa)
+            out.append(f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{x:.1f}" y2="{y:.1f}" stroke="#94a3b8" stroke-opacity=".45" stroke-dasharray="2 3"/>')
+            upd = updates.get(s["name"])
+            deg = math.degrees(a)
+            left = 90 < (deg % 360) < 270
+            lx, ly = cx + (r3 + 10) * math.cos(a), cy + (r3 + 10) * math.sin(a)
+            tip = escape(f'{s["name"]} (정적 의존만, 사용 미관측)\n경로: {" → ".join(s["via"] + [s["name"]])}'
+                         + (f'\n업데이트 가능 → {evr(upd, s["name"])}' if upd else ""))
+            ring = (f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="none" stroke="{COL_UPD}" stroke-width="2"/>' if upd else "")
+            out.append(
+                f'<g><title>{tip}</title>{ring}<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="#fff" stroke="#94a3b8" stroke-width="1.8"/>'
+                f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="10" dominant-baseline="middle" text-anchor="{"end" if left else "start"}"'
+                f' transform="rotate({deg + 180 if left else deg:.1f} {lx:.1f} {ly:.1f})" fill="{"#5b21b6" if upd else "#64748b"}">'
+                f'{escape(s["name"][:22])}</text></g>')
+
     for c, (px, py) in ppos.items():
         if r1:
             w = 14 + 7 * len(c)
@@ -117,8 +161,10 @@ def service_map(unit: str, pk: list[dict], procs: list[dict], updates: dict[str,
                f'<text x="{cx:.1f}" y="{cy + 13:.1f}" font-size="11" fill="#cbd5e1" text-anchor="middle">{escape(sub)} · 패키지 {len(pkgs)}</text></g>')
 
     desc = (f"{unit} 서비스가 사용한 RPM 패키지 {len(pkgs)}개. 실행·매핑 {sum(p['executed'] for p in pkgs)}개, "
-            f"파일 열기만 {sum(not p['executed'] for p in pkgs)}개, 업데이트 대기 {sum(p['name'] in updates for p in pkgs)}개. 아래 표에 같은 내용이 있습니다.")
+            f"파일 열기만 {sum(not p['executed'] for p in pkgs)}개, 업데이트 대기 {sum(p['name'] in updates for p in pkgs)}개. "
+            f"정적 의존으로만 연결된 패키지 {len(so)}개(바깥 점선 링). 아래 표에 같은 내용이 있습니다.")
     svg = (f'<svg viewBox="0 0 {size:.0f} {size:.0f}" role="img" aria-labelledby="mapT mapD" class="svcmap" '
            f'font-family="system-ui, Malgun Gothic, sans-serif">'
            f'<title id="mapT">{escape(unit)} 의존성 맵</title><desc id="mapD">{escape(desc)}</desc>{"".join(out)}</svg>')
-    return {"svg": svg, "shown": len(pkgs), "total": len(pk)}
+    return {"svg": svg, "shown": len(pkgs), "total": len(pk), "static_shown": len(so),
+            "static_total": len(static_only or [])}
