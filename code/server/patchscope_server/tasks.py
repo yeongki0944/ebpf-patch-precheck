@@ -32,8 +32,9 @@ def validate_request(packages: list[str], releasever: str | None):
 def create(conn, host_id: str, kind: str, packages: list[str], kernel: bool, releasever: str | None,
            label: str | None, user: str) -> int:
     validate_request(packages, releasever)
-    # 같은 호스트에 대기 중인 같은 종류 요청이 있으면 재사용 (중복 클릭)
-    ex = conn.execute("""SELECT id FROM plan_tasks WHERE host_id = %s AND kind = %s AND status IN ('pending','running')
+    # 아직 가져가지 않은(pending) 같은 요청만 재사용 (중복 클릭). running 은 에이전트 재시작 등으로 멈췄을 수 있음
+    expire(conn)
+    ex = conn.execute("""SELECT id FROM plan_tasks WHERE host_id = %s AND kind = %s AND status = 'pending'
                          AND packages = %s AND kernel = %s AND releasever IS NOT DISTINCT FROM %s""",
                       (host_id, kind, packages, kernel, releasever or None)).fetchone()
     if ex:
@@ -57,6 +58,11 @@ def claim(request: Request, agent_id: str = Depends(require_agent)):
     """에이전트 소유 호스트의 가장 오래된 대기 요청 하나를 running 으로 바꿔 돌려준다."""
     with db.connect() as conn:
         expire(conn)
+        # 에이전트는 한 번에 하나만 처리한다. 새로 가져가려는 시점에 남은 running 은 중단된 것(재시작·OOM 등)
+        conn.execute(
+            """UPDATE plan_tasks t SET status = 'failed', finished_at = now(),
+                 error = 'interrupted: agent restarted before reporting result'
+               FROM hosts h WHERE h.host_id = t.host_id AND h.agent_id = %s AND t.status = 'running'""", (agent_id,))
         row = conn.execute(
             """UPDATE plan_tasks SET status = 'running', claimed_at = now()
                WHERE id = (SELECT t.id FROM plan_tasks t JOIN hosts h USING (host_id)
