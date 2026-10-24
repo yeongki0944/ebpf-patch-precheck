@@ -170,7 +170,7 @@ def detail(conn, host_id: str, tid: int) -> dict | None:
     rebooted = boot if boot and prev_boot and boot["boot_id"] != prev_boot["boot_id"] else None
 
     kernel_items = [i for i in items if analysis.is_kernel_pkg(i["name"])]
-    return {"t": t, "who": who(t), "items": items, "services": services, "coverage": cov,
+    return {"t": t, "who": who(t), "pkg_items": items, "services": services, "coverage": cov,
             "inv_before": inv_before, "inv_after": inv_after, "plans": plans, "window": WINDOW,
             "kernel_items": kernel_items, "rebooted": rebooted, "prev_boot": prev_boot,
             "last_rescan": last_rescan, "n_restart": sum(1 for s in services if s["restart"])}

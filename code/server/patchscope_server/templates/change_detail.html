@@ -12,13 +12,13 @@
     {% if t.comment %}<dt>메모</dt><dd>{{ t.comment }}</dd>{% endif %}
     <dt>결과</dt><dd>{% if t.return_code in (none, 0) %}<span class="badge b-green">성공</span>{% else %}<span class="badge b-red">실패 rc={{ t.return_code }}</span>{% endif %}
       {% if t.releasever %}<span class="muted small">releasever {{ t.releasever }}</span>{% endif %}</dd>
-    <dt>사전 영향 분석</dt><dd>{% for p in d.plans %}<a href="/plans/{{ p.id }}">#{{ p.id }} {{ p.label or '' }}</a> <span class="muted small">({{ p.uploaded_at | ts(tz) }}, 변경 패키지 {{ p.matched }}/{{ d.items | length }} 포함)</span>{% if not loop.last %} · {% endif %}
+    <dt>사전 영향 분석</dt><dd>{% for p in d.plans %}<a href="/plans/{{ p.id }}">#{{ p.id }} {{ p.label or '' }}</a> <span class="muted small">({{ p.uploaded_at | ts(tz) }}, 변경 패키지 {{ p.matched }}/{{ d.pkg_items | length }} 포함)</span>{% if not loop.last %} · {% endif %}
       {% else %}<span class="badge b-amber">없음</span> <span class="small muted">이 변경 전에 만든 패치 계획이 없습니다.</span>{% endfor %}</dd>
   </dl>
 </div>
 
 <div class="stats">
-  <div class="stat blue"><div class="n">{{ d.items | length }}</div><div class="l">변경된 패키지</div></div>
+  <div class="stat blue"><div class="n">{{ d.pkg_items | length }}</div><div class="l">변경된 패키지</div></div>
   <div class="stat gray"><div class="n">{{ d.services | length }}</div><div class="l">영향받은 서비스 (관측)</div></div>
   <div class="stat {{ 'red' if d.n_restart else 'green' }}"><div class="n">{{ d.n_restart }}</div><div class="l">재시작 필요 가능</div></div>
   <div class="stat {{ 'amber' if d.kernel_items else 'gray' }}"><div class="n">{{ '재부팅됨' if d.rebooted else ('재부팅 필요' if d.kernel_items else '-') }}</div><div class="l">커널</div></div>
@@ -77,11 +77,11 @@
 {% else %}<div class="card empty">명령 전후 관측 구간에 변경 패키지를 사용한 서비스가 없습니다.</div>{% endfor %}
 </div>
 
-<h2>패키지 변경 ({{ d.items | length }})</h2>
+<h2>패키지 변경 ({{ d.pkg_items | length }})</h2>
 <div class="toolbar"><input type="search" placeholder="패키지 검색" data-filter="#pkgT" aria-label="패키지 검색"></div>
 <div class="table-wrap"><table id="pkgT">
   <thead><tr><th scope="col">패키지</th><th scope="col">동작</th><th scope="col">이전</th><th scope="col">이후</th></tr></thead>
-  <tbody>{% for i in d.items %}
+  <tbody>{% for i in d.pkg_items %}
   <tr><td><a class="pkg-link" href="/hosts/{{ h.host_id }}/packages/{{ i.name }}"><strong>{{ i.name }}</strong></a></td>
     <td><span class="badge {{ 'b-blue' if i.action == '업그레이드' else 'b-red' if i.action == '제거' else 'b-amber' if '커널' in (i.action or '') else 'b-gray' }}">{{ i.action }}</span></td>
     <td class="mono small">{{ i['from'] or '-' }}</td><td class="mono small"><strong>{{ i.to or '-' }}</strong></td></tr>
