@@ -134,7 +134,25 @@ server {
     }
 }
 EOF
-# 기본 80 서버 비활성화 (SG 에서도 80 미개방)
+# CloudFront VPC origin 용 80 (SG 에서 CloudFront 서비스 SG 만 허용). 웹 화면 전용, 에이전트 API 는 443 만.
+cat > /etc/nginx/conf.d/patchscope-cf.conf <<EOF
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 16m;
+    # 수집 API 는 사설 CA HTTPS(443) 로만 받는다
+    location /api/ { return 403; }
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        # 시청자 ↔ CloudFront 는 HTTPS (viewer_protocol_policy=redirect-to-https)
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120s;
+    }
+}
+EOF
+# 기본 80 서버 비활성화 (patchscope-cf.conf 가 80 을 담당)
 sed -i 's/^\(\s*\)listen\s\+80/\1# listen 80/; s/^\(\s*\)listen\s\+\[::\]:80/\1# listen [::]:80/' /etc/nginx/nginx.conf
 nginx -t
 systemctl daemon-reload

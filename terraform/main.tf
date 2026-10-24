@@ -81,15 +81,8 @@ resource "aws_vpc_security_group_ingress_rule" "analysis_from_agents" {
   description                  = "agent HTTPS ingestion"
 }
 
-resource "aws_vpc_security_group_ingress_rule" "analysis_from_operator" {
-  for_each          = toset(var.operator_cidrs)
-  security_group_id = aws_security_group.analysis.id
-  cidr_ipv4         = each.value
-  ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
-  description       = "operator HTTPS"
-}
+# 운영자 직접 443 접근은 제거: 웹은 CloudFront(cloudfront.tf) 로만 접근한다.
+# operator_cidrs 는 CloudFront Function 의 IP 허용 목록으로 사용.
 
 resource "aws_vpc_security_group_egress_rule" "all" {
   for_each = {

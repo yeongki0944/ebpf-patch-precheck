@@ -18,3 +18,8 @@ output "ssm_connect" {
 output "artifacts_bucket" {
   value = aws_s3_bucket.artifacts.bucket
 }
+
+output "web_url" {
+  description = "운영자 웹 (CloudFront 기본 인증서)"
+  value       = "https://${aws_cloudfront_distribution.web.domain_name}"
+}
