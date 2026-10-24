@@ -24,6 +24,7 @@ import (
 	"github.com/yeongki0944/ebpf-patch-precheck/code/agent/internal/rpminv"
 	"github.com/yeongki0944/ebpf-patch-precheck/code/agent/internal/sender"
 	"github.com/yeongki0944/ebpf-patch-precheck/code/agent/internal/spool"
+	"github.com/yeongki0944/ebpf-patch-precheck/code/agent/internal/tasks"
 )
 
 var version = "dev" // -ldflags "-X main.version=..."
@@ -175,6 +176,8 @@ func cmdRun(args []string) {
 	excl := fs.String("exclude-paths", "/proc/,/sys/,/dev/", "comma separated path prefixes to drop for file events")
 	exclComm := fs.String("exclude-comms", "", "comma separated comm names to drop for file_open")
 	duration := fs.Duration("duration", 0, "stop after duration (0 = until signal)")
+	planTool := fs.String("plan-tool", "/opt/patchscope/plan-export/patchscope-plan-export", "plan-export tool (resolve only). empty = disable task polling")
+	taskEvery := fs.Duration("task-poll", 15*time.Second, "server task polling interval")
 	_ = fs.Parse(args)
 
 	if *agentID == "" {
@@ -278,6 +281,16 @@ func cmdRun(args []string) {
 		log.Printf("spool inventory: %v", err)
 	}
 	startSender()
+	if snd != nil && *planTool != "" {
+		if _, err := os.Stat(*planTool); err == nil {
+			p := &tasks.Poller{Client: snd.Client(), Server: *server, Token: snd.Token(), AgentID: *agentID,
+				Tool: *planTool, Interval: *taskEvery}
+			go p.Run(ctx)
+			log.Printf("plan task polling enabled (%s, every %s)", *planTool, *taskEvery)
+		} else {
+			log.Printf("plan tool %s not found: plan task polling disabled", *planTool)
+		}
+	}
 	log.Printf("session %s status=%s server=%q", col.SessionID(), rep.Status, *server)
 
 	if err := col.Run(ctx); err != nil {

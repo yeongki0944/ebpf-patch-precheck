@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}관측 기간 · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<div class="notice info small">
+  <strong>관측 기간</strong>은 에이전트가 시작해서 멈출 때까지 쉬지 않고 관측한 구간입니다. 에이전트 재시작·서버 재부팅 때마다 새 기간이 시작됩니다.
+  손실이 있는 기간의 "관측 없음"은 판단 근거로 쓰기 어렵습니다.
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">시작</th><th scope="col">길이</th><th scope="col">커널 / boot</th><th scope="col" class="num">서비스</th><th scope="col">수집 상태</th><th scope="col">설치 패키지 기준</th><th scope="col"></th></tr></thead>
+  <tbody>
+  {% for s in periods %}
+  {% set t = s.total or {} %}
+  <tr>
+    <td>{{ s.first_window_start | ts(tz) }}<br><span class="muted small">{{ '종료됨' if s.ended else '진행 중 또는 마지막 수신 ' ~ (s.last_created_at | ago) }}</span></td>
+    <td>{{ duration(s.first_window_start, s.last_created_at) }}</td>
+    <td class="mono small">{{ s.kernel }}<br>boot {{ s.boot_id[:8] }}</td>
+    <td class="num">{{ s.services }}</td>
+    <td>{% if s.incomplete_batches or s.dropped_batch_ids or (s.max_seq != s.batch_count) %}
+        <span class="badge b-amber">불완전</span><br><span class="small muted">손실 구간 {{ s.incomplete_batches }} · 미수신 {{ s.max_seq - s.batch_count }}</span>
+        {% else %}<span class="badge b-green">손실 없음</span>{% endif %}
+        <br><span class="small muted">이벤트 {{ t.events_received or 0 }}</span></td>
+    <td class="mono small">{{ s.inventory_ids | join(', ') }}{% if s.inventory_ids | length > 1 %}<br><span class="badge b-blue">기간 중 패키지 변경</span>{% endif %}</td>
+    <td><a href="/hosts/{{ h.host_id }}/services?session={{ s.session_id }}">서비스 보기</a></td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="empty">관측 기간이 없습니다.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

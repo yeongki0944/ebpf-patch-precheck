@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}서버 목록{% endblock %}
+{% block body %}
+<h1>서버 목록</h1>
+<p class="sub">에이전트가 실행 파일·라이브러리·설정 파일 사용을 관측 중인 서버입니다. 서버를 선택해 패치 계획을 만들고 영향을 확인하세요.</p>
+
+{% if not hosts %}
+<div class="card empty">아직 데이터를 보낸 서버가 없습니다. 대상 서버에 에이전트를 등록하세요.</div>
+{% endif %}
+
+<div class="grid">
+{% for h in hosts %}
+  <article class="card host-card" aria-labelledby="h-{{ loop.index }}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem">
+      <a class="name" id="h-{{ loop.index }}" href="/hosts/{{ h.host_id }}">{{ h.hostname }}</a>
+      <span class="small"><span class="status-dot dot-{{ h.health[0] }}" aria-hidden="true"></span>{{ h.health[1] }}</span>
+    </div>
+    <dl class="kv">
+      <dt>OS</dt><dd>{{ h.os_id | upper }} {{ h.os_version }}</dd>
+      <dt>커널</dt><dd class="mono">{{ h.kernel }}</dd>
+      <dt>마지막 수신</dt><dd>{{ h.last_seen | ago }}</dd>
+      <dt>관측 서비스</dt><dd>{{ h.services or 0 }}개 (최근 24시간)</dd>
+      <dt>업데이트 가능</dt><dd>{% if h.updates is not none %}{{ h.updates }}개 <span class="muted small">({{ h.updates_at | ago }} 확인)</span>{% else %}<span class="muted">미확인</span>{% endif %}</dd>
+      <dt>패치 계획</dt><dd>{{ h.plans }}개</dd>
+    </dl>
+    {% if h.lossy %}<div class="notice warn small" style="margin:.25rem 0">최근 24시간 중 수집 손실 구간이 있습니다.</div>{% endif %}
+    <div class="toolbar" style="margin-top:auto">
+      <a class="btn primary" href="/hosts/{{ h.host_id }}/plans/new">패치 계획 만들기</a>
+      <a class="btn" href="/hosts/{{ h.host_id }}/services">서비스 보기</a>
+    </div>
+  </article>
+{% endfor %}
+</div>
+
+{% if recent %}
+<h2>최근 패치 계획</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">계획</th><th scope="col">서버</th><th scope="col">유형</th><th scope="col" class="num">변경 패키지</th><th scope="col">만든 시각</th></tr></thead>
+  <tbody>
+  {% for p in recent %}
+  <tr><td><a href="/plans/{{ p.id }}">#{{ p.id }} {{ p.label or '' }}</a></td><td>{{ p.hostname }}</td>
+      <td>{{ '커널' if p.plan_type == 'kernel' else '패키지' }}</td><td class="num">{{ p.items }}</td><td>{{ p.uploaded_at | ts(tz) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+{% endblock %}

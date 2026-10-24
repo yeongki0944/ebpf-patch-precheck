@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ unit }} · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<div class="crumbs"><a href="/hosts/{{ h.host_id }}/services?session={{ sid }}">서비스 의존성</a> › {{ unit }}</div>
+<h2 style="margin-top:.25rem">{{ unit }}</h2>
+<div class="stats">
+  <div class="stat gray"><div class="n">{{ pk | length }}</div><div class="l">사용한 RPM 패키지</div></div>
+  <div class="stat gray"><div class="n">{{ pk | selectattr('executed') | list | length }}</div><div class="l">실행·매핑 근거 있음</div></div>
+  <div class="stat gray"><div class="n">{{ procs | map(attribute='n') | sum }}</div><div class="l">프로세스 인스턴스</div></div>
+</div>
+<p class="small muted">프로세스: {% for p in procs %}{{ p.comm }} ×{{ p.n }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+
+<div class="toolbar"><input type="search" placeholder="패키지·파일 검색 (예: openssl, libxml2)" data-filter="#pkT" aria-label="패키지 검색"></div>
+<div class="table-wrap"><table id="pkT">
+  <thead><tr><th scope="col">패키지</th><th scope="col">근거</th><th scope="col">프로세스</th><th scope="col">파일</th><th scope="col">기간</th></tr></thead>
+  <tbody>
+  {% for p in pk %}
+  <tr>
+    <td><strong>{{ p.name }}</strong><br><span class="mono small muted">{{ p.nevra.split(':',1)[-1] }}</span></td>
+    <td>{% if p.executed %}<span class="badge b-red">실행·매핑</span>{% else %}<span class="badge b-amber">파일 열기만</span>{% endif %}
+        <br><span class="small muted">{{ p.kinds | join(', ') }}</span></td>
+    <td class="small">{{ p.comms[:4] | join(', ') }}</td>
+    <td class="mono small">{{ (p.files | reject('none') | list)[:3] | join(', ') }}{% if p.files | length > 3 %} <span class="muted">외 {{ p.files | length - 3 }}</span>{% endif %}</td>
+    <td class="small">{{ p['first'] | ts(tz) }}<br>{{ p['last'] | ts(tz) }}</td>
+  </tr>
+  {% else %}<tr><td colspan="5" class="empty">RPM 소유 파일 사용 근거가 없습니다.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+
+{% if other %}
+<h3>RPM 으로 설명되지 않는 파일</h3>
+<p class="small muted">RPM 미소유(unmanaged)이거나 경로를 확정하지 못한 파일입니다. 영향 없음으로 처리하지 않습니다.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">구분</th><th scope="col" class="num">레코드</th><th scope="col">예시</th></tr></thead>
+  <tbody>{% for o in other %}<tr><td>{{ '패키지 미소유' if o.ownership == 'unmanaged' else '판정 불가' }} <span class="muted small">({{ o.path_status }})</span></td>
+    <td class="num">{{ o.n }}</td><td class="mono small">{{ (o.paths | reject('none') | list)[:4] | join(', ') }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% endblock %}

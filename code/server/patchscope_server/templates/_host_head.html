@@ -1,0 +1,16 @@
+{# 서버 상세 공통 머리말 + 탭. 변수: h, tab #}
+<div class="crumbs"><a href="/">서버 목록</a> › {{ h.hostname }}</div>
+<div class="page-head">
+  <div>
+    <h1>{{ h.hostname }}</h1>
+    <p class="sub">{{ h.os_id | upper }} {{ h.os_version }} · 커널 <span class="mono">{{ h.kernel }}</span> · 마지막 수신 {{ h.last_seen | ago }}</p>
+  </div>
+  <div class="toolbar"><a class="btn primary" href="/hosts/{{ h.host_id }}/plans/new">+ 패치 계획 만들기</a></div>
+</div>
+<nav class="tabs" aria-label="서버 메뉴">
+  <a href="/hosts/{{ h.host_id }}" {% if tab == 'overview' %}aria-current="page"{% endif %}>개요</a>
+  <a href="/hosts/{{ h.host_id }}/plans" {% if tab == 'plans' %}aria-current="page"{% endif %}>패치 계획·영향 분석</a>
+  <a href="/hosts/{{ h.host_id }}/services" {% if tab == 'services' %}aria-current="page"{% endif %}>서비스 의존성</a>
+  <a href="/hosts/{{ h.host_id }}/compare" {% if tab == 'compare' %}aria-current="page"{% endif %}>패치 전후 비교</a>
+  <a href="/hosts/{{ h.host_id }}/periods" {% if tab == 'periods' %}aria-current="page"{% endif %}>관측 기간</a>
+</nav>

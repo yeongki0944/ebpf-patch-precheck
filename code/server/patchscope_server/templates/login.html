@@ -1,11 +1,17 @@
 {% extends "base.html" %}
+{% block title %}로그인{% endblock %}
 {% block body %}
-<h1>로그인</h1>
-{% if error %}<p class="badge bad" role="alert">{{ error }}</p>{% endif %}
-<form method="post" action="/login">
-  <input type="hidden" name="csrf" value="{{ csrf }}">
-  <label for="pw">관리자 비밀번호</label>
-  <input id="pw" type="password" name="password" autocomplete="current-password" required>
-  <button type="submit">로그인</button>
-</form>
+<div class="card" style="max-width:420px;margin:4rem auto">
+  <h1>PatchScope 로그인</h1>
+  <p class="muted">OS 패키지 패치 영향 분석 PoC</p>
+  {% if error %}<div class="notice bad" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field">
+      <label for="pw">관리자 비밀번호</label>
+      <input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>
+    </div>
+    <button class="btn primary" type="submit" style="width:100%;justify-content:center">로그인</button>
+  </form>
+</div>
 {% endblock %}

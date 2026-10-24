@@ -165,3 +165,34 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     result      jsonb NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- UI 에서 요청한 "패치 계획 계산" 작업. 에이전트가 pull 해서 실행(계산만), 결과를 올린다.
+CREATE TABLE IF NOT EXISTS plan_tasks (
+    id           bigserial PRIMARY KEY,
+    host_id      text NOT NULL REFERENCES hosts ON DELETE CASCADE,
+    kind         text NOT NULL CHECK (kind IN ('list_updates', 'resolve_plan')),
+    packages     text[] NOT NULL DEFAULT '{}',
+    kernel       boolean NOT NULL DEFAULT false,
+    releasever   text,
+    label        text,
+    status       text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'failed', 'expired')),
+    requested_by text,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    claimed_at   timestamptz,
+    finished_at  timestamptz,
+    error        text,
+    plan_id      bigint REFERENCES patch_plans ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS plan_tasks_host ON plan_tasks (host_id, requested_at DESC);
+
+-- 에이전트가 계산한 최신 업데이트 가능 목록
+CREATE TABLE IF NOT EXISTS available_updates (
+    host_id      text PRIMARY KEY REFERENCES hosts ON DELETE CASCADE,
+    inventory_id text,
+    releasever   text,
+    generated_at timestamptz,
+    updates      jsonb NOT NULL,
+    received_at  timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE hosts ADD COLUMN IF NOT EXISTS default_releasever text;

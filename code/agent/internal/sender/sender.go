@@ -38,6 +38,10 @@ type Sender struct {
 	wake   chan struct{}
 }
 
+// Client/Token 은 같은 TLS 설정·토큰으로 작업 요청(pull)에 재사용한다.
+func (s *Sender) Client() *http.Client { return s.client }
+func (s *Sender) Token() string        { return s.token }
+
 func New(cfg Config, sp *spool.Spool) (*Sender, error) {
 	if !strings.HasPrefix(cfg.ServerURL, "https://") {
 		return nil, fmt.Errorf("server url must be https")

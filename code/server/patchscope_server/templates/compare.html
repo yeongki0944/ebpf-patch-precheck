@@ -1,32 +1,62 @@
 {% extends "base.html" %}
+{% block title %}패치 전후 비교 · {{ h.hostname }}{% endblock %}
 {% block body %}
-<h1>패치 전후 비교</h1>
-<table>
-  <thead><tr><th scope="col"></th><th scope="col">이전</th><th scope="col">이후</th></tr></thead>
+{% include "_host_head.html" %}
+{% if not b %}
+<div class="card empty">비교할 관측 기간이 2개 이상 필요합니다. 패치 전 작업을 관측한 뒤 패치하고, 같은 작업을 다시 관측하세요.</div>
+{% else %}
+<form method="get" class="card toolbar">
+  <label for="bf">패치 전</label>
+  <select id="bf" name="before">{% for s in periods %}<option value="{{ s.session_id }}" {% if s.session_id == b.session_id %}selected{% endif %}>{{ s.first_window_start | ts(tz) }} · {{ s.kernel }}</option>{% endfor %}</select>
+  <label for="af">패치 후</label>
+  <select id="af" name="after">{% for s in periods %}<option value="{{ s.session_id }}" {% if s.session_id == a.session_id %}selected{% endif %}>{{ s.first_window_start | ts(tz) }} · {{ s.kernel }}</option>{% endfor %}</select>
+  <button class="btn" type="submit">비교</button>
+  <span class="muted small">기본값: 설치 패키지나 boot 가 바뀐 시점 전후의 관측 기간을 자동 선택</span>
+</form>
+
+<div class="stats">
+  <div class="stat {{ 'amber' if changes else 'green' }}"><div class="n">{{ changes | length }}</div><div class="l">라이브러리 버전 변화</div></div>
+  <div class="stat gray"><div class="n">{{ units | length }}</div><div class="l">변화가 있는 서비스</div></div>
+  <div class="stat {{ 'red' if (afails | length) > (bfails | length) else 'gray' }}"><div class="n">{{ bfails | length }} → {{ afails | length }}</div><div class="l">실패한 파일 접근 종류</div></div>
+  <div class="stat {{ 'red' if (aexits | length) > (bexits | length) else 'gray' }}"><div class="n">{{ bexits | length }} → {{ aexits | length }}</div><div class="l">비정상 종료 종류</div></div>
+</div>
+
+<div class="table-wrap" style="margin-bottom:1rem"><table>
+  <thead><tr><th scope="col"></th><th scope="col">패치 전</th><th scope="col">패치 후</th></tr></thead>
   <tbody>
-    <tr><th scope="row">세션</th><td class="mono"><a href="/sessions/{{ b.session_id }}">{{ b.session_id[:12] }}</a></td><td class="mono"><a href="/sessions/{{ a.session_id }}">{{ a.session_id[:12] }}</a></td></tr>
-    <tr><th scope="row">커널 / boot</th><td class="mono">{{ b.kernel }} / {{ b.boot_id[:8] }}</td><td class="mono">{{ a.kernel }} / {{ a.boot_id[:8] }}</td></tr>
-    <tr><th scope="row">기간</th><td>{{ b.first_window_start | ts(tz) }} ~ {{ b.last_created_at | ts(tz) }}</td><td>{{ a.first_window_start | ts(tz) }} ~ {{ a.last_created_at | ts(tz) }}</td></tr>
-    <tr><th scope="row">인벤토리</th><td class="mono">{{ b.inventory_ids | join(', ') }}</td><td class="mono">{{ a.inventory_ids | join(', ') }}</td></tr>
-    <tr><th scope="row">수집 상태</th>
+    <tr><th scope="row">기간</th><td>{{ b.first_window_start | ts(tz) }} ({{ duration(b.first_window_start, b.last_created_at) }})</td><td>{{ a.first_window_start | ts(tz) }} ({{ duration(a.first_window_start, a.last_created_at) }})</td></tr>
+    <tr><th scope="row">커널 / boot</th><td class="mono small">{{ b.kernel }} / {{ b.boot_id[:8] }}</td><td class="mono small">{{ a.kernel }} / {{ a.boot_id[:8] }}</td></tr>
+    <tr><th scope="row">설치 패키지 기준</th><td class="mono small">{{ b.inventory_ids | join(', ') }}</td><td class="mono small">{{ a.inventory_ids | join(', ') }}</td></tr>
+    <tr><th scope="row">수집</th>
       <td>{{ '손실 없음' if not b.incomplete_batches and not b.dropped_batch_ids else '불완전' }}</td>
       <td>{{ '손실 없음' if not a.incomplete_batches and not a.dropped_batch_ids else '불완전' }}</td></tr>
   </tbody>
-</table>
-<div class="note">같은 작업을 수행한 세션끼리 비교해야 의미가 있습니다. 차이는 패치 원인으로 자동 확정하지 않습니다.</div>
+</table></div>
+<div class="notice info small">같은 작업을 수행한 관측 기간끼리 비교해야 의미가 있습니다. 차이가 보여도 패치 때문이라고 자동으로 확정하지 않습니다.</div>
 
-<h2>서비스·프로세스별 RPM 의존 변화</h2>
-<table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">패키지</th><th scope="col">변화</th><th scope="col">이전</th><th scope="col">이후</th></tr></thead><tbody>
-{% for c in changes %}<tr><td>{{ c.unit }}</td><td>{{ c.comm }}</td><td class="mono">{{ c.package }}</td><td>{{ c.change }}</td>
-  <td class="mono">{{ c.before | join(', ') }}</td><td class="mono">{{ c.after | join(', ') }}</td></tr>
-{% else %}<tr><td colspan="6">변화 없음</td></tr>{% endfor %}
-</tbody></table>
+<h2>서비스별 라이브러리 버전 변화</h2>
+<div class="toolbar"><input type="search" placeholder="서비스·패키지 검색" data-filter="#chT" aria-label="변화 검색"></div>
+<div class="table-wrap"><table id="chT">
+  <thead><tr><th scope="col">서비스</th><th scope="col">패키지</th><th scope="col">변화</th><th scope="col">패치 전</th><th scope="col">패치 후</th></tr></thead>
+  <tbody>
+  {% for c in changes %}<tr><td>{{ c.unit }}</td><td><strong>{{ c.package }}</strong></td>
+    <td><span class="badge {{ 'b-blue' if c.change == '버전 변경' else 'b-amber' }}">{{ c.change }}</span></td>
+    <td class="mono small">{{ c.before | map('replace', c.package ~ '-', '') | join(', ') }}</td><td class="mono small">{{ c.after | map('replace', c.package ~ '-', '') | join(', ') }}</td></tr>
+  {% else %}<tr><td colspan="5" class="empty">변화 없음</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+<p class="muted small">"추가/사라짐"은 해당 기간에 그 기능이 실행되었는지에 따라 달라질 수 있습니다.</p>
 
-{% macro errs(rows) %}<table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">대상/코드</th><th scope="col">횟수</th></tr></thead><tbody>
-{% for r in rows %}<tr><td>{{ r.unit }}</td><td>{{ r.comm }}</td><td class="mono">{{ r.requested_path or '' }}{% if r.errno %} errno={{ r.errno }}{% endif %}{% if r.exit_code is defined and r.exit_code is not none %} exit={{ r.exit_code }}{% endif %}{% if r.signal %} signal={{ r.signal }}{% endif %}</td><td>{{ r.n }}</td></tr>
-{% else %}<tr><td colspan="4">없음</td></tr>{% endfor %}</tbody></table>{% endmacro %}
-<h2>실패한 파일 접근 (ENOENT 제외)</h2>
-<h3>이전</h3>{{ errs(bfails) }}<h3>이후</h3>{{ errs(afails) }}
-<h2>비정상 종료</h2>
-<h3>이전</h3>{{ errs(bexits) }}<h3>이후</h3>{{ errs(aexits) }}
+{% macro errs(rows, kind) %}<div class="table-wrap"><table><thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col">{{ '대상 / errno' if kind == 'f' else '종료 코드' }}</th><th scope="col" class="num">횟수</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.unit }}</td><td>{{ r.comm }}</td>
+  <td class="mono small">{% if kind == 'f' %}{{ r.requested_path }} errno={{ r.errno }}{% else %}exit={{ r.exit_code }}{% if r.signal %} signal={{ r.signal }}{% endif %}{% endif %}</td><td class="num">{{ r.n }}</td></tr>
+{% else %}<tr><td colspan="4" class="empty">없음</td></tr>{% endfor %}</tbody></table></div>{% endmacro %}
+<div class="grid" style="grid-template-columns:1fr 1fr">
+  <section><h2>실패한 파일 접근 · 전</h2>{{ errs(bfails, 'f') }}</section>
+  <section><h2>실패한 파일 접근 · 후</h2>{{ errs(afails, 'f') }}</section>
+  <section><h2>비정상 종료 · 전</h2>{{ errs(bexits, 'e') }}</section>
+  <section><h2>비정상 종료 · 후</h2>{{ errs(aexits, 'e') }}</section>
+</div>
+<p class="muted small">파일 없음(ENOENT) 등 정상 탐색 실패는 제외했습니다.</p>
+{% endif %}
 {% endblock %}

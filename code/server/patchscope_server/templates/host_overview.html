@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+
+<div class="stats">
+  <div class="stat {{ {'green':'green','amber':'amber','red':'red'}[h.health[0]] }}"><div class="n" style="font-size:1.1rem">{{ h.health[1] }}</div><div class="l">수집 상태 ({{ h.capability_status }})</div></div>
+  <div class="stat gray"><div class="n">{{ inv.package_count if inv else '-' }}</div><div class="l">설치된 RPM</div></div>
+  <div class="stat gray"><div class="n">{{ upd.updates | length if upd else '-' }}</div><div class="l">업데이트 가능 {% if upd %}({{ upd.received_at | ago }}){% endif %}</div></div>
+  <div class="stat gray"><div class="n">{{ periods | length }}</div><div class="l">최근 관측 기간</div></div>
+</div>
+
+<div class="grid">
+  <section class="card">
+    <h2>최근 패치 계획</h2>
+    {% if plans %}
+    <ul style="padding-left:1.1rem;margin:0">
+      {% for p in plans %}<li><a href="/plans/{{ p.id }}">#{{ p.id }} {{ p.label or '' }}</a> <span class="muted small">{{ p.items }}개 · {{ p.uploaded_at | ago }}</span></li>{% endfor %}
+    </ul>
+    {% else %}<p class="muted">아직 없습니다. 오른쪽 위 <strong>패치 계획 만들기</strong>로 시작하세요.</p>{% endif %}
+  </section>
+  <section class="card">
+    <h2>관측 기간</h2>
+    <p class="muted small">에이전트가 쉬지 않고 관측한 구간입니다. 재시작·재부팅 때마다 새 기간이 시작됩니다.</p>
+    <ul style="padding-left:1.1rem;margin:0">
+      {% for s in periods %}
+      <li>{{ s.first_window_start | ts(tz) }} 부터 {{ duration(s.first_window_start, s.last_created_at) }}
+        {% if s.incomplete_batches or s.dropped_batch_ids %}<span class="badge b-amber">손실 있음</span>{% else %}<span class="badge b-green">손실 없음</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  <section class="card">
+    <h2>수집 기능 점검</h2>
+    {% if caps %}
+    {% set c = caps[0] %}
+    <dl class="kv">
+      <dt>결과</dt><dd>{{ c.status }}</dd>
+      <dt>점검 시각</dt><dd>{{ c.received_at | ts(tz) }}</dd>
+      <dt>에이전트</dt><dd>{{ c.agent_version }}</dd>
+      <dt>boot ID</dt><dd class="mono">{{ c.boot_id }}</dd>
+    </dl>
+    {% if c.report.reasons %}<div class="notice warn small">{{ c.report.reasons | join(' · ') }}</div>{% endif %}
+    <details><summary>점검 항목 {{ c.report.checks | length }}개</summary>
+      <ul class="small">{% for k in c.report.checks %}<li>{{ '✔' if k.ok else '✖' }} {{ k.name }} <span class="muted">{{ k.detail }}</span></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}패치 계획 · {{ h.hostname }}{% endblock %}
+{% block head %}{% if busy %}<meta name="ps-refresh" content="5">{% endif %}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+
+{% set running = tasks | selectattr('status', 'in', ['pending','running']) | list %}
+{% if running %}
+<div class="notice info" role="status">
+  {% for t in running %}
+  <div><strong>{{ '업데이트 목록 확인' if t.kind == 'list_updates' else '계획 계산' }} {{ '대기 중' if t.status == 'pending' else '진행 중' }}</strong>
+    — {{ t.label or '' }} <span class="muted">({{ t.requested_at | ago }} 요청). 에이전트가 가져가 계산합니다. 이 화면은 자동으로 새로고침됩니다.</span></div>
+  {% endfor %}
+</div>
+{% endif %}
+{% for t in tasks if t.status in ('failed','expired') and t.finished_at and loop.index <= 3 %}
+<div class="notice bad"><strong>요청 #{{ t.id }} 실패</strong> ({{ t.label or t.kind }}): <span class="mono small">{{ t.error }}</span></div>
+{% endfor %}
+
+{% if plans %}
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">계획</th><th scope="col">유형</th><th scope="col" class="num">변경 패키지</th><th scope="col">영향 요약 (최근 분석)</th><th scope="col">만든 시각</th><th scope="col">경고</th></tr></thead>
+  <tbody>
+  {% for p in plans %}
+  <tr>
+    <td><a href="/plans/{{ p.id }}"><strong>#{{ p.id }}</strong> {{ p.label or '' }}</a><br><span class="muted small">{{ '화면에서 요청' if (p.uploaded_by or '').startswith('task:') else p.uploaded_by }}</span></td>
+    <td>{{ '커널' if p.plan_type == 'kernel' else '패키지' }}</td>
+    <td class="num">{{ p.items }}</td>
+    <td>{% for cls in ['direct','file_access','static_dependency','no_observation'] if p.counts.get(cls) %}
+          <span class="badge {{ CLASS_INFO[cls][1] }}">{{ CLASS_INFO[cls][0] }} {{ p.counts[cls] }}</span>
+        {% else %}<span class="muted small">열면 분석합니다</span>{% endfor %}</td>
+    <td>{{ p.uploaded_at | ts(tz) }}</td>
+    <td>{% if p.warnings %}<span class="badge b-amber">{{ p.warnings | length }}</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="card empty">아직 패치 계획이 없습니다.<br><a class="btn primary" style="margin-top:.75rem" href="/hosts/{{ h.host_id }}/plans/new">패치 계획 만들기</a></div>
+{% endif %}
+
+<details style="margin-top:1.5rem"><summary>계획 JSON 직접 업로드 (plan-export 도구로 만든 파일)</summary>
+<form class="card" method="post" action="/hosts/{{ h.host_id }}/plans/upload" enctype="multipart/form-data">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="field"><label for="plan">계획 파일</label><input id="plan" type="file" name="file" accept="application/json" required></div>
+  <div class="field"><label for="label">이름 <span class="hint">(선택)</span></label><input id="label" type="text" name="label"></div>
+  <button class="btn" type="submit">업로드</button>
+</form>
+</details>
+{% endblock %}

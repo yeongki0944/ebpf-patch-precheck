@@ -81,6 +81,7 @@ def main():
     ap.add_argument("packages", nargs="*")
     ap.add_argument("--releasever", help="AL2023 목표 releasever (예: latest, 2023.12.20261021)")
     ap.add_argument("--kernel", action="store_true", help="kernel plan")
+    ap.add_argument("--list-updates", action="store_true", help="업데이트 가능 목록만 출력")
     ap.add_argument("-o", "--output", default="-")
     a = ap.parse_args()
 
@@ -105,6 +106,28 @@ def main():
     base.read_all_repos()
     base.configure_plugins()
     base.fill_sack(load_system_repo=True, load_available_repos=True)
+
+    if a.list_updates:
+        # 업데이트 가능 목록 (UI 선택용). 거래 계산 없음
+        q = base.sack.query()
+        inst = {(p.name, p.arch): p for p in q.installed()}
+        ups = []
+        for p in q.upgrades().latest():
+            old = inst.get((p.name, p.arch))
+            ups.append({"name": p.name, "arch": p.arch, "from_nevra": nevra(old) if old else None,
+                        "to_nevra": nevra(p), "repo": p.reponame,
+                        "kernel": p.name in base.conf.installonlypkgs or p.name.startswith("kernel")})
+        out = {"schema_version": SCHEMA_VERSION, "host_id": machine_id(), "inventory_id": inv_before,
+               "generated_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+               "releasever": conf.releasever, "updates": sorted(ups, key=lambda u: u["name"])}
+        s = json.dumps(out, ensure_ascii=False)
+        if a.output == "-":
+            print(s)
+        else:
+            open(a.output, "w").write(s + "\n")
+        base.close()
+        subprocess.call(["rm", "-rf", work])
+        return
 
     if a.kernel:
         targets = a.packages or ["kernel"]

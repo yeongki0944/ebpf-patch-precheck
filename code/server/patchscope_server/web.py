@@ -1,34 +1,72 @@
-"""웹 화면 (서버 렌더링). 브라우저 로그인 필요. 대상 서버로 명령을 보내는 기능은 없다."""
+"""웹 화면 (서버 렌더링). 브라우저 로그인 필요.
+
+대상 서버에는 접속하지 않는다. 패치 계획은 "계산 요청"을 저장하면 에이전트가 가져가 계산만 수행한다.
+"""
 import csv
 import io
 import json
 import secrets
-from datetime import timedelta, timezone
-
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import analysis, auth, db
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+
+from . import analysis, auth, db, tasks
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 KST = timezone(timedelta(hours=9))
 
 
+def _dt(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+
+
 def fmt_ts(v, tz="KST"):
+    v = _dt(v)
     if v is None:
         return ""
-    if isinstance(v, str):
-        from datetime import datetime
-        v = datetime.fromisoformat(v)
-    if v.tzinfo is None:
-        v = v.replace(tzinfo=timezone.utc)
     return v.astimezone(KST if tz == "KST" else timezone.utc).strftime("%Y-%m-%d %H:%M:%S ") + tz
 
 
-templates.env.filters["ts"] = fmt_ts
+def ago(v):
+    v = _dt(v)
+    if v is None:
+        return "없음"
+    s = int((datetime.now(timezone.utc) - v).total_seconds())
+    if s < 60:
+        return f"{s}초 전"
+    if s < 3600:
+        return f"{s // 60}분 전"
+    if s < 86400:
+        return f"{s // 3600}시간 전"
+    return f"{s // 86400}일 전"
+
+
+def duration(a, b):
+    a, b = _dt(a), _dt(b)
+    if not a or not b:
+        return ""
+    s = int((b - a).total_seconds())
+    return f"{s // 3600}시간 {s % 3600 // 60}분" if s >= 3600 else f"{s // 60}분 {s % 60}초"
+
+
+templates.env.filters.update(ts=fmt_ts, ago=ago)
+templates.env.globals.update(duration=duration)
+
+CLASS_INFO = {
+    "direct": ("직접 사용", "b-red", "변경 패키지의 실행 파일·라이브러리를 프로세스가 실행하거나 메모리에 매핑했습니다."),
+    "file_access": ("파일 접근", "b-amber", "변경 패키지의 파일을 열었지만 실행·로딩 여부는 확인되지 않았습니다."),
+    "static_dependency": ("정적 의존", "b-amber", "RPM 의존 관계로만 연결됩니다. 실행은 관측되지 않았습니다."),
+    "no_observation": ("관측 없음", "b-gray", "관측 기간 동안 사용이 보이지 않았습니다. 안전·미사용 판정이 아닙니다."),
+}
+templates.env.globals.update(CLASS_INFO=CLASS_INFO)
 
 
 def render(request: Request, name: str, **ctx):
@@ -40,7 +78,7 @@ def render(request: Request, name: str, **ctx):
 
 
 def check_csrf(request: Request, token: str):
-    if not token or token != request.cookies.get("ps_csrf"):
+    if not token or not secrets.compare_digest(token, request.cookies.get("ps_csrf") or ""):
         raise HTTPException(403, "csrf")
 
 
@@ -55,10 +93,9 @@ def login_form(request: Request):
 def login(request: Request, password: str = Form(...), csrf: str = Form("")):
     check_csrf(request, csrf)
     if not auth.verify_password(password, auth.admin_hash()):
-        return render(request, "login.html", error="invalid password")
+        return render(request, "login.html", error="비밀번호가 올바르지 않습니다.")
     r = RedirectResponse("/", status_code=303)
-    r.set_cookie(auth.COOKIE, auth.make_cookie("admin"), httponly=True, secure=True, samesite="strict",
-                 max_age=8 * 3600)
+    r.set_cookie(auth.COOKIE, auth.make_cookie("admin"), httponly=True, secure=True, samesite="strict", max_age=8 * 3600)
     return r
 
 
@@ -72,74 +109,214 @@ def logout(request: Request, csrf: str = Form("")):
 
 @router.get("/tz/{tz}")
 def set_tz(tz: str, request: Request, user=Depends(auth.require_user)):
-    r = RedirectResponse(request.headers.get("referer") or "/", status_code=303)
+    ref = request.headers.get("referer") or "/"
+    r = RedirectResponse(ref if ref.startswith("https://") or ref.startswith("/") else "/", status_code=303)
     r.set_cookie("ps_tz", "UTC" if tz == "UTC" else "KST", secure=True, samesite="strict")
     return r
 
 
-# ---------------------------------------------------------------- hosts / sessions
+# ---------------------------------------------------------------- data helpers
+
+def host_or_404(conn, host_id):
+    h = conn.execute("SELECT * FROM hosts WHERE host_id = %s", (host_id,)).fetchone()
+    if not h:
+        raise HTTPException(404)
+    return h
+
+
+def periods(conn, host_id, limit=50):
+    return conn.execute(
+        """SELECT s.*, (SELECT count(DISTINCT unit) FROM records r WHERE r.session_id = s.session_id AND unit LIKE '%%.service') AS services
+           FROM sessions s WHERE host_id = %s ORDER BY first_window_start DESC LIMIT %s""", (host_id, limit)).fetchall()
+
+
+def health(h):
+    """호스트 카드 상태: (점 색, 문구)."""
+    if h["capability_status"] == "unsupported":
+        return "red", "수집 불가"
+    last = _dt(h["last_seen"])
+    if last and (datetime.now(timezone.utc) - last).total_seconds() > 300:
+        return "red", "수신 끊김"
+    if h["capability_status"] == "degraded":
+        return "amber", "일부 기능 제한"
+    return "green", "정상 수집 중"
+
+
+# ---------------------------------------------------------------- dashboard
 
 @router.get("/", response_class=HTMLResponse)
-def hosts(request: Request, user=Depends(auth.require_user)):
+def dashboard(request: Request, user=Depends(auth.require_user)):
     with db.connect() as conn:
-        rows = conn.execute(
-            """SELECT h.*, a.last_seen AS agent_last_seen, a.revoked_at,
-                      (SELECT inventory_id FROM inventories i WHERE i.host_id = h.host_id ORDER BY received_at DESC LIMIT 1) AS inventory_id,
-                      (SELECT report->'reasons' FROM capability_reports c WHERE c.host_id = h.host_id ORDER BY received_at DESC LIMIT 1) AS reasons
-               FROM hosts h JOIN agents a USING (agent_id) ORDER BY h.hostname""").fetchall()
-    return render(request, "hosts.html", hosts=rows)
+        hosts = conn.execute(
+            """SELECT h.*,
+                 (SELECT count(*) FROM sessions s WHERE s.host_id = h.host_id) AS periods,
+                 (SELECT jsonb_array_length(updates) FROM available_updates u WHERE u.host_id = h.host_id) AS updates,
+                 (SELECT received_at FROM available_updates u WHERE u.host_id = h.host_id) AS updates_at,
+                 (SELECT count(*) FROM patch_plans p WHERE p.host_id = h.host_id) AS plans,
+                 (SELECT count(DISTINCT unit) FROM records r WHERE r.host_id = h.host_id AND unit LIKE '%%.service'
+                    AND r.ts_utc > now() - interval '1 day') AS services,
+                 (SELECT bool_or(s.incomplete_batches > 0 OR cardinality(s.dropped_batch_ids) > 0)
+                    FROM sessions s WHERE s.host_id = h.host_id AND s.last_created_at > now() - interval '1 day') AS lossy
+               FROM hosts h ORDER BY h.hostname""").fetchall()
+        recent = conn.execute(
+            """SELECT p.id, p.label, p.plan_type, p.uploaded_at, h.hostname, h.host_id,
+                      jsonb_array_length(p.plan->'items') AS items
+               FROM patch_plans p JOIN hosts h USING (host_id) ORDER BY p.uploaded_at DESC LIMIT 8""").fetchall()
+    for h in hosts:
+        h["health"] = health(h)
+    return render(request, "dashboard.html", hosts=hosts, recent=recent, nav="dash")
 
+
+# ---------------------------------------------------------------- host
 
 @router.get("/hosts/{host_id}", response_class=HTMLResponse)
-def host_detail(host_id: str, request: Request, user=Depends(auth.require_user)):
+def host_overview(host_id: str, request: Request, user=Depends(auth.require_user)):
     with db.connect() as conn:
-        h = conn.execute("SELECT * FROM hosts WHERE host_id = %s", (host_id,)).fetchone()
-        if not h:
-            raise HTTPException(404)
-        sessions = conn.execute("SELECT * FROM sessions WHERE host_id = %s ORDER BY first_window_start DESC LIMIT 50", (host_id,)).fetchall()
-        caps = conn.execute("SELECT id, status, kernel, boot_id, agent_version, received_at, report FROM capability_reports WHERE host_id = %s ORDER BY received_at DESC LIMIT 10", (host_id,)).fetchall()
-        invs = conn.execute("SELECT * FROM inventories WHERE host_id = %s ORDER BY received_at DESC", (host_id,)).fetchall()
-        plans = conn.execute("SELECT id, plan_type, label, inventory_id, uploaded_at, validation->'warnings' AS warnings FROM patch_plans WHERE host_id = %s ORDER BY uploaded_at DESC", (host_id,)).fetchall()
-    return render(request, "host.html", h=h, sessions=sessions, caps=caps, invs=invs, plans=plans)
+        h = host_or_404(conn, host_id)
+        h["health"] = health(h)
+        caps = conn.execute("SELECT status, kernel, boot_id, agent_version, received_at, report FROM capability_reports WHERE host_id = %s ORDER BY received_at DESC LIMIT 5", (host_id,)).fetchall()
+        inv = conn.execute("SELECT * FROM inventories WHERE host_id = %s ORDER BY received_at DESC LIMIT 1", (host_id,)).fetchone()
+        ps = periods(conn, host_id, 5)
+        upd = conn.execute("SELECT * FROM available_updates WHERE host_id = %s", (host_id,)).fetchone()
+        plans = conn.execute("SELECT id, label, plan_type, uploaded_at, jsonb_array_length(plan->'items') AS items FROM patch_plans WHERE host_id = %s ORDER BY uploaded_at DESC LIMIT 5", (host_id,)).fetchall()
+    return render(request, "host_overview.html", h=h, caps=caps, inv=inv, periods=ps, upd=upd, plans=plans, tab="overview")
 
 
-@router.get("/sessions/{session_id}", response_class=HTMLResponse)
-def session_detail(session_id: str, request: Request, user=Depends(auth.require_user)):
+@router.get("/hosts/{host_id}/periods", response_class=HTMLResponse)
+def host_periods(host_id: str, request: Request, user=Depends(auth.require_user)):
     with db.connect() as conn:
-        s = conn.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,)).fetchone()
-        if not s:
-            raise HTTPException(404)
-        bad = conn.execute("SELECT batch_id, seq, created_at, reason, delta FROM batches WHERE session_id = %s AND NOT complete ORDER BY seq", (session_id,)).fetchall()
-        seqs = [r["seq"] for r in conn.execute("SELECT seq FROM batches WHERE session_id = %s ORDER BY seq", (session_id,))]
-        missing = sorted(set(range(1, (max(seqs) if seqs else 0) + 1)) - set(seqs))
-        services = conn.execute(
-            """SELECT coalesce(unit,'(unattributed)') AS unit, count(DISTINCT proc_key) AS procs,
-                      count(DISTINCT path) FILTER (WHERE ownership='rpm') AS rpm_files,
-                      count(DISTINCT p) AS packages
-               FROM records LEFT JOIN LATERAL unnest(packages) p ON true
-               WHERE session_id = %s AND proc_key IS NOT NULL GROUP BY 1 ORDER BY 1""", (session_id,)).fetchall()
-    return render(request, "session.html", s=s, bad=bad, missing=missing, services=services)
+        h = host_or_404(conn, host_id)
+        ps = periods(conn, host_id)
+    return render(request, "host_periods.html", h=h, periods=ps, tab="periods")
 
 
-@router.get("/sessions/{session_id}/service", response_class=HTMLResponse)
-def service_deps(session_id: str, unit: str, request: Request, user=Depends(auth.require_user)):
-    """서비스의 프로세스 → 실행 파일·공유 라이브러리·RPM."""
+@router.get("/hosts/{host_id}/services", response_class=HTMLResponse)
+def host_services(host_id: str, request: Request, session: str | None = None, user=Depends(auth.require_user)):
     with db.connect() as conn:
-        u = None if unit == "(unattributed)" else unit
-        rows = conn.execute(
-            """SELECT comm, proc_key, kind, path, path_status, ownership, packages, ok,
-                      min(ts_utc) AS first, max(coalesce(last_ts_utc, ts_utc)) AS last, sum(count) AS events,
-                      array_agg(DISTINCT source) AS sources
-               FROM records WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s
-                 AND kind IN ('process','exec','mapped_file','file_mmap','file_open','open_fd')
-               GROUP BY 1,2,3,4,5,6,7,8 ORDER BY comm, proc_key, kind, path LIMIT 5000""", (session_id, u)).fetchall()
-    return render(request, "service.html", session_id=session_id, unit=unit, rows=rows)
+        h = host_or_404(conn, host_id)
+        ps = periods(conn, host_id)
+        sid = session or (ps[0]["session_id"] if ps else None)
+        rows = []
+        if sid:
+            rows = conn.execute(
+                """SELECT coalesce(unit,'(서비스 미확인)') AS unit, count(DISTINCT proc_key) AS procs,
+                          count(DISTINCT comm) AS comms, array_agg(DISTINCT comm) AS comm_list,
+                          count(DISTINCT p) AS packages, max(coalesce(last_ts_utc, ts_utc)) AS last
+                   FROM records LEFT JOIN LATERAL unnest(packages) p ON true
+                   WHERE session_id = %s AND proc_key IS NOT NULL GROUP BY 1 ORDER BY packages DESC, 1""", (sid,)).fetchall()
+    return render(request, "host_services.html", h=h, periods=ps, sid=sid, rows=rows, tab="services")
 
 
-# ---------------------------------------------------------------- plans / analysis
+@router.get("/hosts/{host_id}/services/detail", response_class=HTMLResponse)
+def service_detail(host_id: str, unit: str, session: str, request: Request, user=Depends(auth.require_user)):
+    """서비스 → 프로세스 → 패키지 → 파일."""
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        u = None if unit == "(서비스 미확인)" else unit
+        pk = conn.execute(
+            """SELECT p AS nevra, count(DISTINCT proc_key) AS procs, array_agg(DISTINCT comm) AS comms,
+                      array_agg(DISTINCT kind) AS kinds, array_agg(DISTINCT path) AS files,
+                      min(ts_utc) AS first, max(coalesce(last_ts_utc, ts_utc)) AS last
+               FROM records, unnest(packages) p
+               WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s AND ownership IN ('rpm','deleted')
+               GROUP BY 1 ORDER BY 1""", (session, u)).fetchall()
+        other = conn.execute(
+            """SELECT ownership, path_status, count(*) AS n, array_agg(DISTINCT coalesce(path, requested_path)) AS paths
+               FROM records WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s AND ownership IN ('unmanaged','unknown')
+                 AND NOT (kind = 'file_open' AND ok IS FALSE)
+               GROUP BY 1,2 ORDER BY n DESC""", (session, u)).fetchall()
+        procs = conn.execute(
+            """SELECT comm, count(DISTINCT proc_key) AS n, min(ts_utc) AS first FROM records
+               WHERE session_id = %s AND unit IS NOT DISTINCT FROM %s AND proc_key IS NOT NULL GROUP BY 1 ORDER BY 2 DESC""",
+            (session, u)).fetchall()
+    for p in pk:
+        p["name"] = analysis.nevra_name(p["nevra"])
+        p["executed"] = bool(set(p["kinds"]) & {"exec", "process", "mapped_file", "file_mmap"})
+    return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs, tab="services")
 
-@router.post("/plans")
-async def upload_plan(request: Request, file: UploadFile, label: str = Form(""), csrf: str = Form(""),
+
+# ---------------------------------------------------------------- plans
+
+@router.get("/hosts/{host_id}/plans", response_class=HTMLResponse)
+def host_plans(host_id: str, request: Request, user=Depends(auth.require_user)):
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        tasks.expire(conn)
+        plans = conn.execute(
+            """SELECT p.id, p.label, p.plan_type, p.uploaded_at, p.uploaded_by, p.inventory_id,
+                      jsonb_array_length(p.plan->'items') AS items, p.validation->'warnings' AS warnings,
+                      (SELECT result->'packages' FROM analysis_results a WHERE a.plan_id = p.id ORDER BY created_at DESC LIMIT 1) AS last_pk
+               FROM patch_plans p WHERE host_id = %s ORDER BY uploaded_at DESC""", (host_id,)).fetchall()
+        tl = conn.execute("SELECT * FROM plan_tasks WHERE host_id = %s ORDER BY requested_at DESC LIMIT 10", (host_id,)).fetchall()
+    for p in plans:
+        cnt = {}
+        for k in (p["last_pk"] or []):
+            cnt[k["classification"]] = cnt.get(k["classification"], 0) + 1
+        p["counts"] = cnt
+    busy = any(t["status"] in ("pending", "running") for t in tl)
+    return render(request, "host_plans.html", h=h, plans=plans, tasks=tl, busy=busy, tab="plans")
+
+
+@router.get("/hosts/{host_id}/plans/new", response_class=HTMLResponse)
+def plan_new(host_id: str, request: Request, user=Depends(auth.require_user)):
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        tasks.expire(conn)
+        upd = conn.execute("SELECT * FROM available_updates WHERE host_id = %s", (host_id,)).fetchone()
+        inv = conn.execute("SELECT inventory_id FROM inventories WHERE host_id = %s ORDER BY received_at DESC LIMIT 1", (host_id,)).fetchone()
+        pending = conn.execute("SELECT * FROM plan_tasks WHERE host_id = %s AND kind = 'list_updates' AND status IN ('pending','running') ORDER BY id DESC LIMIT 1", (host_id,)).fetchone()
+        last_fail = conn.execute("SELECT * FROM plan_tasks WHERE host_id = %s AND kind = 'list_updates' ORDER BY id DESC LIMIT 1", (host_id,)).fetchone()
+        # 각 업데이트 후보 패키지를 최근 관측에서 사용한 서비스 수 (선택 도움말)
+        usage = {}
+        if upd:
+            names = [u["name"] for u in upd["updates"]]
+            for r in conn.execute(
+                    """SELECT ip.name, count(DISTINCT r.unit) AS units, array_agg(DISTINCT r.unit) AS unit_list
+                       FROM records r
+                       CROSS JOIN LATERAL unnest(r.packages) AS p(nevra)
+                       JOIN inventory_packages ip ON ip.host_id = r.host_id AND ip.nevra = p.nevra
+                       WHERE r.host_id = %s AND r.ts_utc > now() - interval '1 day' AND ip.name = ANY(%s)
+                         AND r.unit LIKE '%%.service' AND r.unit <> ALL(%s)
+                         AND r.kind IN ('exec','process','mapped_file','file_mmap')
+                       GROUP BY 1""", (host_id, names, list(analysis.OPERATOR_UNITS))):
+                usage[r["name"]] = r
+    stale = bool(upd and inv and upd["inventory_id"] != inv["inventory_id"])
+    is_al = h["os_id"] == "amzn"
+    return render(request, "plan_new.html", h=h, upd=upd, usage=usage, pending=pending, last=last_fail,
+                  stale=stale, is_al=is_al, tab="plans")
+
+
+@router.post("/hosts/{host_id}/updates/refresh")
+def updates_refresh(host_id: str, request: Request, csrf: str = Form(""), releasever: str = Form(""),
+                    user=Depends(auth.require_user)):
+    check_csrf(request, csrf)
+    with db.connect() as conn:
+        host_or_404(conn, host_id)
+        tasks.create(conn, host_id, "list_updates", [], False, releasever.strip() or None, None, user)
+    return RedirectResponse(f"/hosts/{host_id}/plans/new", status_code=303)
+
+
+@router.post("/hosts/{host_id}/plans/request")
+async def plan_request(host_id: str, request: Request, user=Depends(auth.require_user)):
+    form = await request.form()
+    check_csrf(request, form.get("csrf", ""))
+    mode = form.get("mode", "selected")
+    pkgs = sorted(set(form.getlist("packages"))) if mode == "selected" else []
+    if mode == "selected" and not pkgs:
+        raise HTTPException(400, "패키지를 하나 이상 선택하세요")
+    kernel = mode == "kernel"
+    rel = (form.get("releasever") or "").strip() or None
+    label = (form.get("label") or "").strip()[:120] or {
+        "selected": f"{len(pkgs)}개 패키지: " + ", ".join(pkgs[:3]) + (" …" if len(pkgs) > 3 else ""),
+        "all": "전체 업데이트", "kernel": "커널 업데이트"}[mode]
+    with db.connect() as conn:
+        host_or_404(conn, host_id)
+        tasks.create(conn, host_id, "resolve_plan", pkgs, kernel, rel, label, user)
+    return RedirectResponse(f"/hosts/{host_id}/plans", status_code=303)
+
+
+@router.post("/hosts/{host_id}/plans/upload")
+async def upload_plan(host_id: str, request: Request, file: UploadFile, label: str = Form(""), csrf: str = Form(""),
                       user=Depends(auth.require_user)):
     check_csrf(request, csrf)
     raw = await file.read()
@@ -149,6 +326,8 @@ async def upload_plan(request: Request, file: UploadFile, label: str = Form(""),
         plan = json.loads(raw)
     except ValueError:
         raise HTTPException(400, "invalid json")
+    if plan.get("host_id") != host_id:
+        raise HTTPException(400, "계획의 host_id 가 이 서버와 다릅니다")
     with db.connect() as conn:
         v = analysis.validate_plan(conn, plan)
         row = conn.execute(
@@ -170,9 +349,14 @@ def load_plan(conn, plan_id: int):
 def plan_view(plan_id: int, request: Request, user=Depends(auth.require_user)):
     with db.connect() as conn:
         p = load_plan(conn, plan_id)
+        h = host_or_404(conn, p["host_id"])
         res = analysis.analyze(conn, p)
         conn.execute("INSERT INTO analysis_results (plan_id, result) VALUES (%s, %s)", (plan_id, analysis.to_json(res)))
-    return render(request, "analysis.html", p=p, r=res)
+    counts = {}
+    for k in res["packages"]:
+        counts[k["classification"]] = counts.get(k["classification"], 0) + 1
+    svc_count = len([s for s in res["services"] if s["unit"] != "(unattributed)"])
+    return render(request, "analysis.html", p=p, h=h, r=res, counts=counts, svc_count=svc_count, tab="plans")
 
 
 @router.get("/plans/{plan_id}/report.json")
@@ -188,6 +372,7 @@ def report_csv(plan_id: int, user=Depends(auth.require_user)):
     with db.connect() as conn:
         res = analysis.analyze(conn, load_plan(conn, plan_id))
     buf = io.StringIO()
+    buf.write("\ufeff")  # Excel 한글
     w = csv.writer(buf)
     w.writerow(["package", "from", "to", "classification", "evidence", "unit", "unit_source", "comm", "pid",
                 "proc_key", "evidence_kinds", "files", "first_utc", "last_utc", "events"])
@@ -200,31 +385,55 @@ def report_csv(plan_id: int, user=Depends(auth.require_user)):
             w.writerow([p["name"], p["from"], p["to"], p["classification"], kind, d["unit"], d["unit_source"],
                         d["comm"], d["pid"], d["proc_key"], ";".join(d["evidence_kinds"]), ";".join(d["files"]),
                         d["first"], d["last"], d["events"]])
-    return Response(buf.getvalue(), media_type="text/csv",
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=patchscope-plan-{plan_id}.csv"})
 
 
-@router.get("/compare", response_class=HTMLResponse)
-def compare(request: Request, before: str, after: str, user=Depends(auth.require_user)):
-    """패치 전후 세션 비교: 서비스별 프로세스·RPM 의존 관계·실패 접근 차이."""
+# ---------------------------------------------------------------- compare
+
+def auto_compare_pair(conn, host_id):
+    """인벤토리가 바뀐 시점 기준: 최신 관측 기간(후)과 그 이전 다른 인벤토리의 마지막 관측 기간(전)."""
+    ps = conn.execute("SELECT session_id, inventory_ids, kernel, boot_id FROM sessions WHERE host_id = %s AND batch_count > 3 ORDER BY first_window_start DESC", (host_id,)).fetchall()
+    if len(ps) < 2:
+        return None, None
+    after = ps[0]
+    for s in ps[1:]:
+        if set(s["inventory_ids"] or []) != set(after["inventory_ids"] or []) or s["boot_id"] != after["boot_id"]:
+            return s["session_id"], after["session_id"]
+    return ps[1]["session_id"], after["session_id"]
+
+
+@router.get("/hosts/{host_id}/compare", response_class=HTMLResponse)
+def compare(host_id: str, request: Request, before: str | None = None, after: str | None = None,
+            user=Depends(auth.require_user)):
     with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        ps = periods(conn, host_id)
+        if not before or not after:
+            before, after = auto_compare_pair(conn, host_id)
+        if not before:
+            return render(request, "compare.html", h=h, periods=ps, b=None, a=None, tab="compare")
+
         def snap(sid):
-            s = conn.execute("SELECT * FROM sessions WHERE session_id = %s", (sid,)).fetchone()
+            s = conn.execute("SELECT * FROM sessions WHERE session_id = %s AND host_id = %s", (sid, host_id)).fetchone()
             if not s:
                 raise HTTPException(404, sid)
             deps = conn.execute(
-                """SELECT coalesce(unit,'(unattributed)') AS unit, comm, p AS nevra
+                """SELECT coalesce(unit,'(서비스 미확인)') AS unit, p AS nevra
                    FROM records, unnest(packages) p
                    WHERE session_id = %s AND ownership = 'rpm' AND kind IN ('process','exec','mapped_file','file_mmap')
-                   GROUP BY 1,2,3""", (sid,)).fetchall()
+                     AND (unit IS NULL OR unit <> ALL(%s))
+                   GROUP BY 1,2""", (sid, list(analysis.OPERATOR_UNITS))).fetchall()
             fails = conn.execute(
-                """SELECT coalesce(unit,'(unattributed)') AS unit, comm, requested_path, errno, sum(count) AS n
-                   FROM records WHERE session_id = %s AND kind = 'file_open' AND ok IS FALSE AND errno <> 2
-                   GROUP BY 1,2,3,4""", (sid,)).fetchall()
+                """SELECT coalesce(unit,'(서비스 미확인)') AS unit, comm, requested_path, errno, sum(count) AS n
+                   FROM records WHERE session_id = %s AND kind = 'file_open' AND ok IS FALSE AND errno NOT IN (2, 6, 20)
+                     AND (unit IS NULL OR unit <> ALL(%s))
+                   GROUP BY 1,2,3,4 ORDER BY n DESC LIMIT 100""", (sid, list(analysis.OPERATOR_UNITS))).fetchall()
             exits = conn.execute(
-                """SELECT coalesce(unit,'(unattributed)') AS unit, comm, exit_code, signal, count(*) AS n
+                """SELECT coalesce(unit,'(서비스 미확인)') AS unit, comm, exit_code, signal, count(*) AS n
                    FROM records WHERE session_id = %s AND kind = 'exit' AND (exit_code <> 0 OR signal IS NOT NULL)
-                   GROUP BY 1,2,3,4""", (sid,)).fetchall()
+                     AND (unit IS NULL OR unit <> ALL(%s))
+                   GROUP BY 1,2,3,4 ORDER BY n DESC LIMIT 100""", (sid, list(analysis.OPERATOR_UNITS))).fetchall()
             return s, deps, fails, exits
 
         b, bdeps, bfails, bexits = snap(before)
@@ -233,15 +442,15 @@ def compare(request: Request, before: str, after: str, user=Depends(auth.require
     def by_name(rows):
         out = {}
         for r in rows:
-            out.setdefault((r["unit"], r["comm"], analysis.nevra_name(r["nevra"])), set()).add(r["nevra"])
+            out.setdefault((r["unit"], analysis.nevra_name(r["nevra"])), set()).add(r["nevra"])
         return out
     bm, am = by_name(bdeps), by_name(adeps)
     changes = []
     for k in sorted(set(bm) | set(am)):
         bv, av = bm.get(k, set()), am.get(k, set())
         if bv != av:
-            changes.append({"unit": k[0], "comm": k[1], "package": k[2],
-                            "before": sorted(bv), "after": sorted(av),
-                            "change": "added" if not bv else "removed" if not av else "version"})
-    return render(request, "compare.html", b=b, a=a, changes=changes,
-                  bfails=bfails, afails=afails, bexits=bexits, aexits=aexits)
+            changes.append({"unit": k[0], "package": k[1], "before": sorted(bv), "after": sorted(av),
+                            "change": "추가" if not bv else "사라짐" if not av else "버전 변경"})
+    units = sorted({c["unit"] for c in changes})
+    return render(request, "compare.html", h=h, periods=ps, b=b, a=a, changes=changes, units=units,
+                  bfails=bfails, afails=afails, bexits=bexits, aexits=aexits, tab="compare")

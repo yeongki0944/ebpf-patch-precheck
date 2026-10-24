@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}서비스 의존성 · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<form method="get" class="toolbar">
+  <label for="sess">관측 기간</label>
+  <select id="sess" name="session">
+    {% for s in periods %}<option value="{{ s.session_id }}" {% if s.session_id == sid %}selected{% endif %}>{{ s.first_window_start | ts(tz) }} ({{ duration(s.first_window_start, s.last_created_at) }}){% if loop.first %} · 최신{% endif %}</option>{% endfor %}
+  </select>
+  <button class="btn" type="submit">보기</button>
+  <input type="search" placeholder="서비스·프로세스 검색" data-filter="#svcT" aria-label="서비스 검색" style="margin-left:auto">
+</form>
+<p class="muted small">서비스(systemd unit)마다 실행된 프로세스와 사용한 RPM 패키지 수입니다. 서비스를 누르면 패키지·파일 근거를 볼 수 있습니다.</p>
+<div class="table-wrap"><table id="svcT">
+  <thead><tr><th scope="col">서비스</th><th scope="col">프로세스</th><th scope="col" class="num">인스턴스</th><th scope="col" class="num">사용 패키지</th><th scope="col">마지막 관측</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td><a href="/hosts/{{ h.host_id }}/services/detail?unit={{ r.unit | urlencode }}&session={{ sid }}"><strong>{{ r.unit }}</strong></a></td>
+    <td class="small">{{ (r.comm_list | reject('none') | list)[:6] | join(', ') }}{% if r.comms > 6 %} 외 {{ r.comms - 6 }}{% endif %}</td>
+    <td class="num">{{ r.procs }}</td>
+    <td class="num">{{ r.packages }}</td>
+    <td class="small">{{ r.last | ago }}</td>
+  </tr>
+  {% else %}<tr><td colspan="5" class="empty">관측된 서비스가 없습니다.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

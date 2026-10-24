@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}패치 계획 만들기 · {{ h.hostname }}{% endblock %}
+{% block head %}{% if pending %}<meta name="ps-refresh" content="5">{% endif %}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+
+<h2 style="margin-top:0">1단계 · 업데이트 가능한 패키지 확인</h2>
+<div class="card">
+  {% if pending %}
+    <div class="notice info" role="status"><strong>확인 중입니다.</strong> 에이전트가 저장소를 조회하고 있습니다(보통 1~2분). 이 화면은 자동으로 새로고침됩니다.</div>
+  {% elif upd %}
+    <p>{{ upd.received_at | ts(tz) }} 기준 <strong>{{ upd.updates | length }}개</strong> 패키지를 업데이트할 수 있습니다.
+       {% if upd.releasever %}<span class="muted">(releasever {{ upd.releasever }})</span>{% endif %}</p>
+    {% if stale %}<div class="notice warn">이 목록을 확인한 뒤 서버의 설치 패키지가 바뀌었습니다. 다시 확인하세요.</div>{% endif %}
+  {% else %}
+    <p>아직 확인하지 않았습니다. 아래 버튼을 누르면 에이전트가 저장소를 조회합니다. <span class="muted">설치는 하지 않습니다.</span></p>
+  {% endif %}
+  {% if last and last.status in ('failed','expired') and not pending %}<div class="notice bad">이전 확인 실패: <span class="mono small">{{ last.error }}</span></div>{% endif %}
+  <form method="post" action="/hosts/{{ h.host_id }}/updates/refresh" class="toolbar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if is_al %}
+    <label for="rv1">목표 릴리스 <span class="hint">AL2023 는 버전이 고정되어 있어 최신 릴리스를 지정해야 합니다</span></label>
+    <input id="rv1" type="text" name="releasever" value="{{ upd.releasever if upd and upd.releasever else 'latest' }}" size="18">
+    {% endif %}
+    <button class="btn" type="submit" {% if pending %}disabled{% endif %}>{{ '다시 확인' if upd else '업데이트 목록 확인' }}</button>
+  </form>
+</div>
+
+{% if upd %}
+<h2>2단계 · 패치 범위 선택</h2>
+<form method="post" action="/hosts/{{ h.host_id }}/plans/request" data-select-count="#selN" data-submit="#go">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if is_al %}<input type="hidden" name="releasever" value="{{ upd.releasever or 'latest' }}">{% endif %}
+  <fieldset class="card" style="border:1px solid var(--line)">
+    <legend class="small muted">무엇을 패치할지 고르세요. 선택한 패키지에 필요한 종속 패키지는 자동으로 계산됩니다.</legend>
+    <div class="choice">
+      <label><input type="radio" name="mode" value="selected" checked> <span>선택한 패키지<br><span class="hint">아래 목록에서 체크 (<span id="selN">0</span>개 선택)</span></span></label>
+      <label><input type="radio" name="mode" value="all"> <span>전체 업데이트<br><span class="hint">{{ upd.updates | length }}개 모두</span></span></label>
+      <label><input type="radio" name="mode" value="kernel"> <span>커널만<br><span class="hint">재부팅이 필요한 별도 검증</span></span></label>
+    </div>
+    <div class="field" style="margin-top:.9rem;max-width:480px"><label for="label">계획 이름 <span class="hint">(선택, 비우면 자동)</span></label>
+      <input id="label" type="text" name="label" placeholder="예: 10월 보안패치 - openssl"></div>
+  </fieldset>
+
+  <div class="toolbar">
+    <label for="q" class="sr">검색</label>
+    <input id="q" type="search" placeholder="패키지 또는 서비스 이름으로 검색" data-filter="#updTable" data-count="#visN">
+    <span class="muted small">표시 <span id="visN">{{ upd.updates | length }}</span>개</span>
+    <button class="btn" type="button" data-check-visible>표시된 항목 모두 선택</button>
+    <span style="margin-left:auto"></span>
+    <button id="go" class="btn primary" type="submit">계획 계산 요청</button>
+  </div>
+  <div class="table-wrap" style="max-height:60vh">
+  <table id="updTable">
+    <thead><tr><th scope="col"><span class="sr">선택</span></th><th scope="col">패키지</th><th scope="col">현재 → 목표</th><th scope="col">최근 사용 서비스</th></tr></thead>
+    <tbody>
+    {% for u in upd.updates %}
+    {% set us = usage.get(u.name) %}
+    <tr>
+      <td><input type="checkbox" name="packages" value="{{ u.name }}" id="p{{ loop.index }}" aria-label="{{ u.name }} 선택"></td>
+      <td><label for="p{{ loop.index }}" style="font-weight:600">{{ u.name }}</label>{% if u.kernel %} <span class="badge b-blue">커널</span>{% endif %}<br><span class="muted small">{{ u.arch }} · {{ u.repo }}</span></td>
+      <td class="mono small">{{ (u.from_nevra or '').split(':',1)[-1] }}<br>→ {{ u.to_nevra.split(':',1)[-1] }}</td>
+      <td>{% if us %}<span class="badge b-red">{{ us.units }}개 서비스</span> <span class="small muted">{{ us.unit_list[:4] | join(', ') }}{% if us.units > 4 %} …{% endif %}</span>
+          {% else %}<span class="muted small">최근 24시간 사용 관측 없음</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">계산 요청은 에이전트가 가져가 dnf 로 거래를 <strong>계산만</strong> 합니다. 설치·서비스 재시작은 하지 않습니다.</p>
+</form>
+{% endif %}
+{% endblock %}
