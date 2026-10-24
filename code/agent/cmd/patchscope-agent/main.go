@@ -299,6 +299,7 @@ func cmdRun(args []string) {
 		ReconcileInterval:   *reconEvery,
 		InventoryCheck:      *invEvery,
 		ExecFollowupDelay:   300 * time.Millisecond,
+		StaleRescanFor:      60 * time.Minute,
 		QueueSize:           *queue,
 		MaxRecordsPerBatch:  20000,
 		ExcludePathPrefixes: splitList(*excl),

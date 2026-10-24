@@ -33,6 +33,7 @@ type Config struct {
 	ReconcileInterval   time.Duration
 	InventoryCheck      time.Duration
 	ExecFollowupDelay   time.Duration
+	StaleRescanFor      time.Duration // 인벤토리 변경 후 교체 전 파일 매핑 재검사 지속 시간 (reconcile 주기마다)
 	QueueSize           int
 	MaxRecordsPerBatch  int
 	ExcludePathPrefixes []string
@@ -76,6 +77,10 @@ type Collector struct {
 	total       model.Counters
 	lastKernel  [bpfload.NumStats]uint64
 	droppedIDs  []string
+
+	prevInv     *rpminv.Inventory // 직전 인벤토리 (교체 전 파일의 소유 패키지 해석용)
+	rescanUntil time.Time
+	rescanSeq   uint64
 }
 
 type aggKey struct {
@@ -194,6 +199,9 @@ func (c *Collector) Run(ctx context.Context) error {
 			c.flush("interval", false)
 		case <-reconT.C:
 			c.snapshot(model.SourceSnapshot)
+			if time.Now().Before(c.rescanUntil) {
+				c.staleRescan()
+			}
 		case <-invT.C:
 			c.checkInventory()
 		}
@@ -610,6 +618,7 @@ func (c *Collector) checkInventory() {
 		return
 	}
 	old := c.inv.ID
+	c.prevInv = c.inv
 	c.inv = inv
 	c.res.setInventory(inv)
 	c.res.idx = map[procfs.DevIno]string{}
@@ -619,6 +628,68 @@ func (c *Collector) checkInventory() {
 	c.records = append(c.records, model.Record{Kind: model.KindInventory, Source: model.SourceAgent,
 		TsUTC: time.Now().UTC(), Note: fmt.Sprintf("%s -> %s", old, inv.ID)})
 	log.Printf("inventory changed %s -> %s", old, inv.ID)
+	// 변경 직후부터 일정 시간 동안 교체 전 파일을 아직 매핑 중인 프로세스를 주기적으로 확인
+	c.rescanUntil = time.Now().Add(c.cfg.StaleRescanFor)
+	c.staleRescan()
+}
+
+// staleRescan 은 실행 중인 모든 프로세스의 maps 에서 "(deleted)" 파일 매핑을 찾는다.
+// 패키지 업데이트 후 재시작하지 않은 프로세스는 교체 전 라이브러리를 계속 사용한다 (needs-restarting 과 같은 근거).
+// 교체 전 파일의 소유 패키지는 "변경 전 인벤토리"의 경로 색인으로 찾는다 (현재 경로의 새 파일로 해석하지 않음).
+func (c *Collector) staleRescan() {
+	c.rescanSeq++
+	pids, err := procfs.ListPIDs()
+	if err != nil {
+		return
+	}
+	self := uint32(selfPID())
+	now := time.Now().UTC()
+	note := fmt.Sprintf("rescan=%d", c.rescanSeq)
+	procsWithStale := 0
+	for _, pid := range pids {
+		if pid == self {
+			continue
+		}
+		maps, err := procfs.ReadMaps(pid)
+		if err != nil {
+			continue
+		}
+		var stale []procfs.Mapping
+		for _, m := range maps {
+			if m.Deleted && !strings.HasPrefix(m.Path, "/dev/") && !strings.HasPrefix(m.Path, "/memfd:") &&
+				!strings.HasPrefix(m.Path, "/tmp/") && !strings.HasPrefix(m.Path, "/var/tmp/") {
+				stale = append(stale, m)
+			}
+		}
+		if len(stale) == 0 {
+			continue
+		}
+		st, err := procfs.ReadStat(pid)
+		if err != nil {
+			continue
+		}
+		p, isNew := c.procs.get(pid, st.StartTicks)
+		if isNew || p.unitSource == "" {
+			pst, _ := procfs.ReadStat(st.PPID)
+			c.procs.fillUnit(p, st.PPID, pst.StartTicks)
+		}
+		procsWithStale++
+		for _, m := range stale {
+			f := &model.FileRef{Path: m.Path, PathStatus: model.PathKernel, Dev: m.ID.Dev, Ino: m.ID.Ino,
+				Deleted: true, Ownership: model.OwnDeleted}
+			if c.prevInv != nil {
+				f.Packages = c.prevInv.OwnersByPath(m.Path)
+			}
+			if len(f.Packages) == 0 {
+				f.Note = "old owner unknown (no pre-change inventory in this session)"
+			}
+			c.records = append(c.records, model.Record{Kind: model.KindStale, Source: model.SourceRescan, TsUTC: now,
+				Proc: model.ProcRef{PID: p.pid, StartTicks: p.startTicks, Key: p.key}, PPID: st.PPID, Comm: st.Comm,
+				Unit: p.unit, UnitSource: p.unitSource, File: f, Perms: m.Perms, Note: note})
+		}
+	}
+	c.records = append(c.records, model.Record{Kind: model.KindRescan, Source: model.SourceRescan, TsUTC: now,
+		Note: fmt.Sprintf("%s stale_procs=%d", note, procsWithStale)})
 }
 
 // ---------------------------------------------------------------- 배치

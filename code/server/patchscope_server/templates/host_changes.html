@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}변경 작업 · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<p class="sub" style="margin-top:0">서버에서 실행된 패키지 변경 명령(dnf/yum)입니다. 명령을 누르면 그 시점 전후로 서비스가 어떻게 바뀌었는지 바로 보여줍니다.</p>
+{% if not changes %}
+<div class="card empty">수신한 변경 이력이 없습니다. 에이전트는 시작할 때와 설치 패키지가 바뀔 때 dnf 거래 이력을 보냅니다.</div>
+{% else %}
+<div class="toolbar"><input type="search" placeholder="명령·패키지·사용자 검색" data-filter="#chgT" aria-label="변경 검색"></div>
+<div class="table-wrap"><table id="chgT">
+  <thead><tr><th scope="col">시각</th><th scope="col">명령</th><th scope="col">누가</th><th scope="col">변경 패키지</th><th scope="col">결과</th></tr></thead>
+  <tbody>
+  {% for c in changes %}
+  <tr>
+    <td style="white-space:nowrap"><a href="/hosts/{{ h.host_id }}/changes/{{ c.tid }}"><strong>{{ c.begin_at | ts(tz) }}</strong></a><br><span class="muted small">{{ c.begin_at | ago }} · #{{ c.tid }}</span></td>
+    <td><a href="/hosts/{{ h.host_id }}/changes/{{ c.tid }}" class="mono small" style="color:inherit">{{ c.cmdline or '(명령 기록 없음)' }}</a>
+      {% if c.comment %}<br><span class="badge b-blue">메모</span> {{ c.comment }}{% endif %}</td>
+    <td class="small">{{ c.who }}</td>
+    <td class="small">
+      {% set ups = c.summary | selectattr('action', 'equalto', '업그레이드') | list %}
+      {% if c.kernel %}<span class="badge b-amber">커널</span> {% endif %}
+      {{ c.summary | length }}개{% if ups %} (업그레이드 {{ ups | length }}){% endif %}:
+      {{ (c.summary | map(attribute='name') | list)[:5] | join(', ') }}{% if c.summary | length > 5 %} …{% endif %}</td>
+    <td>{% if c.return_code in (none, 0) %}<span class="badge b-green">성공</span>{% else %}<span class="badge b-red">실패 {{ c.return_code }}</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+<p class="muted small">"누가"는 dnf 가 기록한 로그인 사용자입니다. 원격 명령·자동화로 실행하면 비어 있을 수 있으니 <code>dnf --comment "작업자 / 계획 #번호" ...</code> 로 남기는 것을 권장합니다.</p>
+{% endblock %}

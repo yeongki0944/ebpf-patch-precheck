@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from urllib.parse import urlencode
 
-from . import analysis, auth, db, deps, tasks, timeline, viz
+from . import analysis, auth, changes, db, deps, tasks, timeline, viz
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -263,6 +263,24 @@ def service_detail(host_id: str, unit: str, session: str, request: Request, user
                            link_base=f"/hosts/{host_id}/packages/", link_qs="?" + urlencode({"unit": unit, "session": session}))
     return render(request, "service_detail.html", h=h, unit=unit, sid=session, pk=pk, other=other, procs=procs,
                   vmap=vmap, has_updates=bool(upd_row), static_only=static_only, inv_id=inv_id, tab="services")
+
+
+@router.get("/hosts/{host_id}/changes", response_class=HTMLResponse)
+def host_changes(host_id: str, request: Request, user=Depends(auth.require_user)):
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        cs = changes.list_changes(conn, host_id)
+    return render(request, "host_changes.html", h=h, changes=cs, tab="changes")
+
+
+@router.get("/hosts/{host_id}/changes/{tid}", response_class=HTMLResponse)
+def change_detail(host_id: str, tid: int, request: Request, user=Depends(auth.require_user)):
+    with db.connect() as conn:
+        h = host_or_404(conn, host_id)
+        d = changes.detail(conn, host_id, tid)
+    if not d:
+        raise HTTPException(404)
+    return render(request, "change_detail.html", h=h, d=d, tab="changes")
 
 
 @router.get("/hosts/{host_id}/packages/{name}", response_class=HTMLResponse)

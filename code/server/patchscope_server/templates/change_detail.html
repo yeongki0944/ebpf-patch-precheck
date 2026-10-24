@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}변경 #{{ d.t.tid }} · {{ h.hostname }}{% endblock %}
+{% block body %}
+{% include "_host_head.html" %}
+<div class="crumbs"><a href="/hosts/{{ h.host_id }}/changes">변경 작업</a> › #{{ d.t.tid }}</div>
+{% set t = d.t %}
+<div class="card" style="margin-bottom:1rem">
+  <div class="mono" style="font-size:1rem;background:#0f172a;color:#e2e8f0;padding:.6rem .8rem;border-radius:8px;overflow-x:auto">$ {{ t.cmdline or '(명령 기록 없음)' }}</div>
+  <dl class="kv" style="margin-top:.7rem">
+    <dt>시각</dt><dd>{{ t.begin_at | ts(tz) }} ~ {{ t.end_at | ts(tz) }} <span class="muted small">({{ t.begin_at | ago }})</span></dd>
+    <dt>누가</dt><dd>{{ d.who }}</dd>
+    {% if t.comment %}<dt>메모</dt><dd>{{ t.comment }}</dd>{% endif %}
+    <dt>결과</dt><dd>{% if t.return_code in (none, 0) %}<span class="badge b-green">성공</span>{% else %}<span class="badge b-red">실패 rc={{ t.return_code }}</span>{% endif %}
+      {% if t.releasever %}<span class="muted small">releasever {{ t.releasever }}</span>{% endif %}</dd>
+    <dt>사전 영향 분석</dt><dd>{% for p in d.plans %}<a href="/plans/{{ p.id }}">#{{ p.id }} {{ p.label or '' }}</a> <span class="muted small">({{ p.uploaded_at | ts(tz) }}, 변경 패키지 {{ p.matched }}/{{ d.items | length }} 포함)</span>{% if not loop.last %} · {% endif %}
+      {% else %}<span class="badge b-amber">없음</span> <span class="small muted">이 변경 전에 만든 패치 계획이 없습니다.</span>{% endfor %}</dd>
+  </dl>
+</div>
+
+<div class="stats">
+  <div class="stat blue"><div class="n">{{ d.items | length }}</div><div class="l">변경된 패키지</div></div>
+  <div class="stat gray"><div class="n">{{ d.services | length }}</div><div class="l">영향받은 서비스 (관측)</div></div>
+  <div class="stat {{ 'red' if d.n_restart else 'green' }}"><div class="n">{{ d.n_restart }}</div><div class="l">재시작 필요 가능</div></div>
+  <div class="stat {{ 'amber' if d.kernel_items else 'gray' }}"><div class="n">{{ '재부팅됨' if d.rebooted else ('재부팅 필요' if d.kernel_items else '-') }}</div><div class="l">커널</div></div>
+</div>
+
+{% set c = d.coverage %}
+<div class="notice {{ 'ok' if c.before_batches and c.after_batches and not c.before_bad and not c.after_bad else 'warn' }} small">
+  <strong>비교 구간</strong> · 명령 전 {{ (d.window.total_seconds() / 3600) | int }}시간 ({{ c.before_batches }}개 batch{% if c.before_bad %}, 손실 {{ c.before_bad }}{% endif %})
+  ↔ 명령 후 {{ (d.window.total_seconds() / 3600) | int }}시간 ({{ c.after_batches }}개 batch{% if c.after_bad %}, 손실 {{ c.after_bad }}{% endif %}).
+  {% if not c.before_batches %}명령 전 관측이 없어 이전 사용 버전은 알 수 없습니다.{% endif %}
+  {% if not c.after_batches %}명령 후 관측이 아직 없습니다.{% endif %}
+  {% if d.last_rescan.at %}마지막 재시작 필요 검사 {{ d.last_rescan.at | ts(tz) }}.{% endif %}
+</div>
+
+{% if d.kernel_items %}
+<div class="notice {{ 'ok' if d.rebooted else 'warn' }}">
+  <strong>커널 변경</strong> · {% for k in d.kernel_items %}<span class="mono">{{ k.name }} {{ k.to }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+  {% if d.rebooted %}<br>재부팅 확인: {{ d.rebooted.at | ts(tz) }} · 실행 커널 <span class="mono">{{ d.prev_boot.kernel }}</span> → <span class="mono"><strong>{{ d.rebooted.kernel }}</strong></span>
+  {% else %}<br>아직 재부팅이 관측되지 않았습니다. 새 커널은 재부팅 후 적용됩니다 (실행 커널 <span class="mono">{{ d.prev_boot.kernel if d.prev_boot else '?' }}</span>).{% endif %}
+</div>
+{% endif %}
+
+<h2>서비스별 전후</h2>
+<p class="small muted">명령 직전·직후에 각 서비스가 실제로 사용한 버전입니다. "이전 버전 계속 사용"이나 재시작 필요가 보이면 해당 서비스를 재시작해야 새 버전이 적용됩니다.</p>
+<div id="svcCards">
+{% for s in d.services %}
+<details class="card svc-chg" {% if s.restart or loop.index <= 3 %}open{% endif %}>
+  <summary>
+    <span class="svc-name">{{ s.unit }}</span>
+    <span class="chg-counts">
+      {% if s.restart %}<span class="chg chg-rm">재시작 필요</span>{% else %}<span class="chg chg-add">새 버전 반영</span>{% endif %}
+      <span class="chg chg-same">변경 패키지 {{ s.pkgs | length }}</span>
+    </span>
+    <span></span>
+  </summary>
+  {% if s.stale %}
+  <div class="notice bad small" style="margin-top:.6rem"><strong>교체 전 파일을 아직 사용 중</strong> · 프로세스 {{ s.stale.procs | join(', ') }}
+    {% if s.stale.pkgs %}<br>패키지: {{ s.stale.pkgs | join(', ') }}{% endif %}
+    <br><span class="mono">{{ s.stale.files[:4] | join(', ') }}{% if s.stale.files | length > 4 %} …{% endif %}</span>
+    <br>권장: <code>systemctl restart {{ s.unit }}</code></div>
+  {% endif %}
+  {% if s.pkgs %}
+  <ul class="chg-list" style="margin-top:.6rem">
+  {% for e in s.pkgs %}
+    <li class="{{ 'up' if e.status == '반영됨' else 'rm' if e.status in ('이전 버전 계속 사용','일부 반영') else 'add' }}">
+      <a class="pkg-link" href="/hosts/{{ h.host_id }}/packages/{{ e.name }}?{{ {'unit': s.unit} | urlencode }}"><strong>{{ e.name }}</strong></a>
+      {% if e.before %}<span class="ver {{ 'old' if e.after and e.before != e.after else '' }}">{{ e.before | join(', ') }}</span>{% else %}<span class="ver">(전: 관측 없음)</span>{% endif %}
+      <span class="arrow">→</span>
+      {% if e.after %}<span class="ver new">{{ e.after | join(', ') }}</span>{% else %}<span class="ver">(후: 관측 없음)</span>{% endif %}
+      <span class="badge {{ 'b-blue' if e.status == '반영됨' else 'b-red' if e.status in ('이전 버전 계속 사용','일부 반영') else 'b-gray' }}">{{ e.status }}</span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</details>
+{% else %}<div class="card empty">명령 전후 관측 구간에 변경 패키지를 사용한 서비스가 없습니다.</div>{% endfor %}
+</div>
+
+<h2>패키지 변경 ({{ d.items | length }})</h2>
+<div class="toolbar"><input type="search" placeholder="패키지 검색" data-filter="#pkgT" aria-label="패키지 검색"></div>
+<div class="table-wrap"><table id="pkgT">
+  <thead><tr><th scope="col">패키지</th><th scope="col">동작</th><th scope="col">이전</th><th scope="col">이후</th></tr></thead>
+  <tbody>{% for i in d.items %}
+  <tr><td><a class="pkg-link" href="/hosts/{{ h.host_id }}/packages/{{ i.name }}"><strong>{{ i.name }}</strong></a></td>
+    <td><span class="badge {{ 'b-blue' if i.action == '업그레이드' else 'b-red' if i.action == '제거' else 'b-amber' if '커널' in (i.action or '') else 'b-gray' }}">{{ i.action }}</span></td>
+    <td class="mono small">{{ i['from'] or '-' }}</td><td class="mono small"><strong>{{ i.to or '-' }}</strong></td></tr>
+  {% endfor %}</tbody>
+</table></div>
+<p class="muted small">설치 패키지 기준: {% if d.inv_before %}<span class="mono">{{ d.inv_before.inventory_id }}</span>{% else %}?{% endif %} → {% if d.inv_after %}<span class="mono">{{ d.inv_after.inventory_id }}</span> ({{ d.inv_after.received_at | ts(tz) }} 감지){% else %}아직 수신 전{% endif %}</p>
+{% endblock %}

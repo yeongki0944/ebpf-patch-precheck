@@ -17,6 +17,8 @@ const (
 	KindOpenFD     = "open_fd"         // /proc/PID/fd 의 열린 파일 (현재 상태)
 	KindSnapMissed = "snapshot_missed" // 단기 프로세스 등으로 /proc 상태를 읽지 못함
 	KindInventory  = "inventory_changed"
+	KindStale      = "stale_mapping" // 패키지 변경 후에도 교체 전(삭제된) 파일을 매핑 중인 프로세스
+	KindRescan     = "rescan"        // 변경 후 재검사 실행 기록 (note: rescan=N stale=M)
 )
 
 // Record.Source
@@ -25,6 +27,7 @@ const (
 	SourceSnapshot = "proc_snapshot"
 	SourceFollowup = "proc_exec_followup"
 	SourceAgent    = "agent"
+	SourceRescan   = "post_change_rescan"
 )
 
 // FileRef.PathStatus

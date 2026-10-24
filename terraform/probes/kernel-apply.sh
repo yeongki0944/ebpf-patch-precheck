@@ -3,7 +3,7 @@
 set -uo pipefail
 export DNF_NOTIFY=0
 echo "running=$(uname -r) boot_id=$(cat /proc/sys/kernel/random/boot_id)"
-ARGS=(-y -q)
+ARGS=(-y -q --comment "PatchScope PoC 커널 업데이트 / 작업: kiro")
 [ -n "${RELEASEVER:-}" ] && ARGS+=(--releasever="$RELEASEVER")
 dnf "${ARGS[@]}" upgrade kernel 2>&1 | tail -3
 echo "installed kernels: $(rpm -q kernel | paste -sd' ')"

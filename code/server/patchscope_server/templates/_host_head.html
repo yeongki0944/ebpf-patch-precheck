@@ -11,6 +11,7 @@
   <a href="/hosts/{{ h.host_id }}" {% if tab == 'overview' %}aria-current="page"{% endif %}>개요</a>
   <a href="/hosts/{{ h.host_id }}/plans" {% if tab == 'plans' %}aria-current="page"{% endif %}>패치 계획·영향 분석</a>
   <a href="/hosts/{{ h.host_id }}/services" {% if tab == 'services' %}aria-current="page"{% endif %}>서비스 의존성</a>
-  <a href="/hosts/{{ h.host_id }}/compare" {% if tab == 'compare' %}aria-current="page"{% endif %}>패치 전후 비교</a>
+  <a href="/hosts/{{ h.host_id }}/changes" {% if tab == 'changes' %}aria-current="page"{% endif %}>변경 작업 (명령 기준)</a>
+  <a href="/hosts/{{ h.host_id }}/compare" {% if tab == 'compare' %}aria-current="page"{% endif %}>관측 기간 비교</a>
   <a href="/hosts/{{ h.host_id }}/periods" {% if tab == 'periods' %}aria-current="page"{% endif %}>관측 기간</a>
 </nav>
